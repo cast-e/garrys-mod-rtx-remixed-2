@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace proxy::engine {
@@ -38,6 +39,29 @@ void *g_materials = nullptr;
 // IVEngineClient (VEngineClient013) slot 51: GetLevelName ("maps/x.bsp").
 void *g_engineClient = nullptr;
 char g_level[256] = {};
+
+DWORD g_mainThread = 0; // the thread of the first Present: the engine's main one
+
+// Texture detail Very High (mat_picmip -1) with the Advanced video options
+// hidden: the command line cannot carry it (the engine drops a negative value
+// after a "+" command). Run once the configs and "+" commands have been, from
+// the main thread (the command buffer is not shared with the render thread).
+// OPENREMIX_PROXY_PICMIP: another value, or "keep" to leave it as saved.
+void applyTextureDetail() {
+  static unsigned presents = 0;
+  static bool done = false;
+  if (done || ++presents < 60 || GetCurrentThreadId() != g_mainThread || !g_engineClient)
+    return;
+  done = true;
+  char value[16] = "-1";
+  if (GetEnvironmentVariableA("OPENREMIX_PROXY_PICMIP", value, sizeof(value)) && std::strcmp(value, "keep") == 0)
+    return;
+  char command[48];
+  std::snprintf(command, sizeof(command), "mat_picmip %d\n", std::atoi(value));
+  // IVEngineClient013 slot 106: ClientCmd_Unrestricted.
+  using ClientCmdFn = void (*)(void *, const char *);
+  reinterpret_cast<ClientCmdFn>((*static_cast<void ***>(g_engineClient))[106])(g_engineClient, command);
+}
 } // namespace
 void marker(const char *text) {
   if (!g_materials)
@@ -142,8 +166,12 @@ namespace {
 
 bool install() {
   static bool done = false;
-  if (done)
+  if (!g_mainThread)
+    g_mainThread = GetCurrentThreadId();
+  if (done) {
+    applyTextureDetail();
     return true;
+  }
   // OPENREMIX_PROXY_ENGINE_HOOKS=0 leaves the engine untouched.
   static const bool disabled = [] {
     char v[8] = {};

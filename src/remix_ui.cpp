@@ -310,6 +310,11 @@ void uninstall() {
 
 bool active() { return g_active; }
 
+void open() {
+  if (g_api && !g_active)
+    toggle();
+}
+
 void dumpStatistics(FILE *out) {
   std::fprintf(out, "   Remix panel (F12): %s; open %d, toggles %u, PumpEvents error %d\n", g_status, int(g_active),
                g_toggles, g_pumpError);
