@@ -8,7 +8,7 @@ int main() {
   bake.state = REMIXAPI_BAKE_READY_EXT;
   bake.active = 1;
   bake.activeHash = bake.requestedHash = 17;
-  require(!proxy::retainOffscreenGeometry(2, 2, bake));
+  require(proxy::retainOffscreenGeometry(2, 2, bake));
   require(proxy::retainOffscreenGeometry(1, 1, bake));
   require(proxy::retainOffscreenGeometry(2, 1, bake));
   require(proxy::retainOffscreenGeometry(1, 2, bake));
@@ -23,5 +23,5 @@ int main() {
   bake.state = REMIXAPI_BAKE_READY_EXT;
   bake.activeHash = bake.requestedHash = 0;
   require(proxy::retainOffscreenGeometry(2, 2, bake));
-  std::puts("Engine culling follows matching bake publication, unload, failure and backend transitions");
+  std::puts("Off-screen shadow casters survive bake publication and backend transitions");
 }

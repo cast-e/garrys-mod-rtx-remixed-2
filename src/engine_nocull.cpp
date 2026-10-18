@@ -676,7 +676,7 @@ bool install(void *materials, void *renderView) {
 
 void dumpStatistics(FILE *out) {
   fprintf(out, "   geometry collection: %s\n", g_retainOffscreen.load(std::memory_order_relaxed)
-      ? "retain off-screen (unbaked or ray-traced backend)" : "normal engine culling (matching Forward+ bake)");
+      ? "retain off-screen shadow casters" : "normal engine culling");
   fprintf(out, "== Engine no-cull: %s", g_status.load());
   if (!g_ready.load(std::memory_order_acquire)) {
     fprintf(out, "\n");
