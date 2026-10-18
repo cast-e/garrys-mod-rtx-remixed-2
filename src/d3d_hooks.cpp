@@ -2,6 +2,7 @@
 #include <initguid.h>
 
 #include "d3d_hooks.h"
+#include "diag.h"
 #include "engine_hooks.h"
 #include "sky_faces.h"
 
@@ -716,6 +717,11 @@ HRESULT STDMETHODCALLTYPE reset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp
   targetread::release();
   remix::onCreateDevice(nullptr, pp);
   const HRESULT hr = g_reset(dev, pp);
+  if (FAILED(hr))
+    diag::stage("D3D Reset failed: HRESULT 0x%08lx, size %ux%u, format %u, windowed %d",
+                static_cast<unsigned long>(hr), pp ? pp->BackBufferWidth : 0,
+                pp ? pp->BackBufferHeight : 0, pp ? unsigned(pp->BackBufferFormat) : 0,
+                pp ? int(pp->Windowed) : -1);
   if (SUCCEEDED(hr))
     refreshBackBuffer(dev);
   return hr;
@@ -1747,6 +1753,14 @@ HRESULT STDMETHODCALLTYPE createDevice(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE
                                        D3DPRESENT_PARAMETERS *pp, IDirect3DDevice9 **out) {
   remix::onCreateDevice(focus, pp);
   const HRESULT hr = g_createDevice(d3d, adapter, type, focus, flags, pp, out);
+  if (FAILED(hr))
+    diag::stage("D3D CreateDevice failed: HRESULT 0x%08lx, adapter %u, type %u, flags 0x%lx, "
+                "size %ux%u, format %u, samples %u, swap %u, windowed %d, interval 0x%x",
+                static_cast<unsigned long>(hr), adapter, unsigned(type), static_cast<unsigned long>(flags),
+                pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
+                pp ? unsigned(pp->BackBufferFormat) : 0, pp ? unsigned(pp->MultiSampleType) : 0,
+                pp ? unsigned(pp->SwapEffect) : 0, pp ? int(pp->Windowed) : -1,
+                pp ? pp->PresentationInterval : 0);
   if (SUCCEEDED(hr) && out && *out) {
     hookDevice(*out);
     refreshBackBuffer(*out);
