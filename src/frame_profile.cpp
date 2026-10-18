@@ -1,0 +1,79 @@
+#include "frame_profile.h"
+#include "diag.h"
+#include <windows.h>
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <remix/remix_native_ext.h>
+#include <remix/remix_bake_ext.h>
+
+namespace proxy::frame_profile {
+namespace {
+struct Recorder {
+  using File = std::unique_ptr<FILE, decltype(&std::fclose)>;
+  File file{nullptr, &std::fclose};
+  PFN_remixapi_GetGpuPassTimingsEXT gpu = nullptr;
+  PFN_remixapi_GetFramePerformanceEXT cpu = nullptr;
+  PFN_remixapi_GetBakeStatisticsEXT bake = nullptr;
+  uint64_t lastGpu = ~0ull;
+  uint32_t rows = 0;
+
+  Recorder() {
+    wchar_t path[32768] = {};
+    const auto length = GetEnvironmentVariableW(L"OPENREMIX_PROXY_FRAME_PROFILE", path, 32768);
+    if (!length || length >= 32768) return;
+    // Never overwrite an earlier measurement accidentally.
+    file.reset(_wfopen(path, L"wx"));
+    if (!file) {
+      diag::stage("Frame profile: cannot create new output file");
+      return;
+    }
+    const auto module = GetModuleHandleW(L"remix.dll");
+    gpu = reinterpret_cast<PFN_remixapi_GetGpuPassTimingsEXT>(GetProcAddress(module, "remixapi_GetGpuPassTimingsEXT"));
+    cpu = reinterpret_cast<PFN_remixapi_GetFramePerformanceEXT>(GetProcAddress(module, "remixapi_GetFramePerformanceEXT"));
+    bake = reinterpret_cast<PFN_remixapi_GetBakeStatisticsEXT>(GetProcAddress(module, "remixapi_GetBakeStatisticsEXT"));
+    std::fputs("unixMs,hostMs,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
+               "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,bakeState,bakeHash\n", file.get());
+  }
+
+  void sample(double hostMs) {
+    if (!file) return;
+    remixapi_GpuPassTimingsEXT timings{};
+    timings.structSize = sizeof(timings);
+    const bool available = gpu && gpu(&timings) == REMIXAPI_ERROR_CODE_SUCCESS && timings.available;
+    remixapi_FramePerformanceEXT frame{};
+    frame.structSize = sizeof(frame);
+    if (cpu) cpu(&frame);
+    remixapi_BakeStatisticsEXT lighting{};
+    lighting.structSize = sizeof(lighting);
+    if (bake) bake(&lighting);
+    auto pass = [&](const char *name) {
+      if (available)
+        for (uint32_t i = 0; i < timings.passCount && i < REMIXAPI_GPU_PASS_TIMING_CAPACITY_EXT; ++i)
+          if (std::strcmp(timings.passes[i].name, name) == 0) return timings.passes[i].milliseconds;
+      return 0.0;
+    };
+    FILETIME now;
+    GetSystemTimeAsFileTime(&now);
+    const uint64_t ticks = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
+    const auto unixMs = (ticks - 116444736000000000ull) / 10000;
+    const bool fresh = available && timings.frame != lastGpu;
+    std::fprintf(file.get(), "%llu,%.6f,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%u,%llu\n",
+        static_cast<unsigned long long>(unixMs), hostMs, frame.recordMilliseconds, frame.fenceMilliseconds,
+        unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
+        timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
+        pass("Forward+ opaque world shading"), pass("Forward+ light clustering"),
+        pass("Forward+ local shadow maps"), pass("Forward+ sun shadow cascades"),
+        pass("Forward+ reflection resolve and composition"), lighting.state,
+        static_cast<unsigned long long>(lighting.activeHash));
+    if (available) lastGpu = timings.frame;
+    if (++rows % 120 == 0) std::fflush(file.get());
+  }
+};
+}
+
+void sample(double hostFrameMilliseconds) {
+  static Recorder recorder;
+  recorder.sample(hostFrameMilliseconds);
+}
+}

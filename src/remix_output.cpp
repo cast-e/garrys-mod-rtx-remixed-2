@@ -1,6 +1,7 @@
 #include "source_lights.h"
 #include "styled_lights.h"
 #include "diag.h"
+#include "frame_profile.h"
 #include <map>
 #include "remix_output.h"
 #include "d3d_hooks.h"
@@ -2201,6 +2202,12 @@ bool startRemix() {
         g_api.SetConfigVariable(entry, eq + 1);
       }
     }
+  }
+  char gpuStats[8] = {}, frameProfile[2] = {};
+  if ((GetEnvironmentVariableA("OPENREMIX_PROXY_GPU_STATS", gpuStats, sizeof(gpuStats)) && gpuStats[0] == '1') ||
+      GetEnvironmentVariableA("OPENREMIX_PROXY_FRAME_PROFILE", frameProfile, sizeof(frameProfile))) {
+    const auto result = g_api.SetConfigVariable("rtx.native.gpuPassTimers", "1");
+    diag::stage("GPU profiling: native pass timer request returned %u", unsigned(result));
   }
   return true;
 }
@@ -4505,6 +4512,7 @@ void onPresent() {
     g_frameBegan.store(now.QuadPart, std::memory_order_relaxed);
     g_frameThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
   }
+  frame_profile::sample(g_frameIntervalMs);
   Timer timer(g_usSubmit, &g_totalUs[2]);
   // Classify this frame's perspective views. The main view is the one with the
   // most draws among those sharing the most common field of view. Views with
