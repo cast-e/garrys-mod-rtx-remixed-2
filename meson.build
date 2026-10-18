@@ -10,7 +10,7 @@ remix_inc = get_option('openremix_include')
 if remix_inc == ''
   error('set -Dopenremix_include=<openremix>/public/include')
 endif
-# SDL3 headers for the panel's input events (the runtime ships SDL3.dll).
+# SDL3 headers for the panel's events (the runtime ships SDL3_shared.dll).
 sdl_inc = get_option('sdl_include')
 if sdl_inc == ''
   sdl_inc = remix_inc / '..' / '..' / 'subprojects' / 'SDL3-3.4.14' / 'include'
@@ -94,6 +94,18 @@ device_window_test = executable('device-window-test', 'tests/device_window.cpp',
   include_directories: include_directories('src'),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('Game window ownership across redirected device creation', device_window_test)
+
+engine_visibility_test = executable('engine-visibility-test', 'tests/engine_visibility.cpp',
+  include_directories: include_directories('src', remix_inc),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Engine culling follows bake publication and backend transitions', engine_visibility_test)
+
+remix_ui_test = executable('remix-ui-test', 'tests/remix_ui.cpp', 'src/remix_ui.cpp',
+  include_directories: include_directories('src', remix_inc, sdl_inc),
+  dependencies: meson.get_compiler('cpp').find_library('user32'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('F12 packaged SDL input bridge and native window ownership', remix_ui_test,
+  args: [remix_inc / '../../_work/build/forwardplus/subprojects/SDL3-3.4.14/SDL3_shared.dll'])
 
 source_lights_test = executable('source-lights-test', 'tests/source_lights.cpp', 'src/source_lights.cpp',
   include_directories: include_directories('src', remix_inc),
