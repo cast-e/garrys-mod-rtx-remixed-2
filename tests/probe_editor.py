@@ -1,0 +1,75 @@
+"""Authoring data must not silently cross map revisions or lose transforms."""
+import copy
+import json
+from pathlib import Path
+import struct
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+from probe_editor import document, geometry
+
+
+class AuthoringData(unittest.TestCase):
+    def setUp(self):
+        self.value = document.empty('test', 'abc')
+        volume = document.new_volume([10, 20, 30])
+        volume.update(center=[100, -200, 300], capture=[12, 34, 56],
+                      rotationDegrees=[15, 89, -120], priority=50)
+        self.value['volumes'].append(volume)
+
+    def test_roundtrip_independent_capture_and_rotation(self):
+        result = document.validate(json.loads(json.dumps(self.value)), 'abc')
+        self.assertEqual(result, self.value)
+        self.assertNotEqual(result['volumes'][0]['capture'], result['volumes'][0]['center'])
+
+    def test_rejects_other_map_and_duplicate_identity(self):
+        with self.assertRaises(ValueError):
+            document.validate(self.value, 'different map')
+        self.value['volumes'].append(copy.deepcopy(self.value['volumes'][0]))
+        with self.assertRaises(ValueError):
+            document.validate(self.value, 'abc')
+
+    def test_invalid_transforms_and_priorities(self):
+        for key, bad in [('center', [0, float('nan'), 0]), ('capture', [True, 0, 0]),
+                         ('halfSize', [0, 1, 1]), ('rotationDegrees', [1, 2]),
+                         ('priority', 1.5), ('priority', True), ('priority', 32768)]:
+            value = copy.deepcopy(self.value)
+            value['volumes'][0][key] = bad
+            with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
+                document.validate(value, 'abc')
+
+    def test_geometry_from_world_model_only(self):
+        # One triangle, plus an unrelated vertex which must not become an edge.
+        lumps = {3: struct.pack('<12f', 0, 0, 0, 128, 0, 0, 0, 128, 0, 999, 999, 999),
+                 12: struct.pack('<6H', 0, 1, 1, 2, 2, 0),
+                 13: struct.pack('<3i', 0, 1, 2)}
+        face = bytearray(56)
+        struct.pack_into('<ih', face, 4, 0, 3)
+        struct.pack_into('<h', face, 12, -1)
+        lumps[7] = face
+        model = bytearray(48)
+        struct.pack_into('<2i', model, 40, 0, 1)
+        lumps[14] = model
+        contents = bytearray(1036)
+        contents[:4] = b'VBSP'
+        struct.pack_into('<i', contents, 4, 20)
+        for index, payload in lumps.items():
+            struct.pack_into('<4i', contents, 8 + index * 16, len(contents), len(payload), 0, 0)
+            contents.extend(payload)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'test.bsp'
+            path.write_bytes(contents)
+            result = geometry.load(path)
+            self.assertEqual(len(result['lines']), 3)
+            self.assertTrue(all(max(edge) <= 128 for edge in result['lines']))
+            # A valid lump with a bad edge reference must fail before displaying it.
+            struct.pack_into('<i', contents, struct.unpack_from('<i', contents, 8+13*16)[0], 100)
+            path.write_bytes(contents)
+            with self.assertRaises(ValueError):
+                geometry.load(path)
+
+
+if __name__ == '__main__':
+    unittest.main()
