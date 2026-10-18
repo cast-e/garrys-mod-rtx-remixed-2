@@ -22,14 +22,15 @@ bool equivalent(const uint8_t *current, const std::vector<uint8_t> &previous) {
   uint64_t difference = 0;
   for (size_t i = 0; i < previous.size(); ++i) {
     const unsigned delta = unsigned(std::abs(int(current[i]) - int(previous[i])));
-    if (delta > 2 || (i % 4 == 3 && delta))
+    if (delta > 4 || (i % 4 == 3 && delta))
       return false;
     difference += delta;
   }
-  // Captured skies can differ by two byte levels after dithering/resampling.
-  // Bound their mean difference to 1/32 of one RGB level. A uniform one-level
-  // exposure/colour change fails, as does any larger local change.
-  return difference <= (previous.size() / 4 * 3) / 32;
+  // Repeated unchanged-map captures can differ by four byte levels. Bound mean
+  // RGB error to 1/8 of one byte level, far below a uniform one-level shift.
+  // The accepted reference pixels never change, so this permits no drift.
+  // Exposure/colour changes beyond either bound still replace the reference.
+  return difference <= (previous.size() / 4 * 3) / 8;
 }
 } // namespace
 
