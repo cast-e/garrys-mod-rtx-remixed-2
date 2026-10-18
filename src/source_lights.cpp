@@ -1,6 +1,7 @@
 #include "source_lights.h"
 #include <algorithm>
 #include <cmath>
+#include <remix/remix_native_ext.h>
 
 namespace proxy::lighting {
 remixapi_LightHandle createLight(remixapi_Interface &api, const SourceLight &light, uint64_t hash,
@@ -12,6 +13,8 @@ remixapi_LightHandle createLight(remixapi_Interface &api, const SourceLight &lig
   info.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO;
   info.hash = hash;
   remixapi_LightInfoSphereEXT sphere = {};
+  remixapi_LightInfoBakingEXT baking{REMIXAPI_STRUCT_TYPE_LIGHT_BAKING_EXT, nullptr,
+                                    REMIXAPI_LIGHT_BAKING_PREFER_BAKED_EXT};
   sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
   sphere.position = {light.position[0], light.position[1], light.position[2]};
   sphere.radius = radius;
@@ -38,6 +41,7 @@ remixapi_LightHandle createLight(remixapi_Interface &api, const SourceLight &lig
     // Preserve the existing radiant intensity at the reference distance.
     scale = lightScale * reference * reference / (falloff * pi * radius * radius);
     if (light.type == kSurface) {
+      sphere.pNext = &baking;
       if (!validDirection)
         return nullptr;
       // VRAD's emit_surface uses max(dot(normal, outgoing), 0), not the

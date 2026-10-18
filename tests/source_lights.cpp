@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <remix/remix_native_ext.h>
 
 namespace {
 remixapi_LightInfoSphereEXT sphere;
@@ -10,12 +11,14 @@ remixapi_LightInfoDistantEXT distant;
 remixapi_Float3D radiance;
 unsigned calls = 0;
 bool reject = false;
+remixapi_LightBakingHintEXT bakingHint = REMIXAPI_LIGHT_BAKING_DEFAULT_EXT;
 void require(bool value, const char *message) {
   if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
 }
 remixapi_ErrorCode REMIXAPI_CALL capture(const remixapi_LightInfo *info, remixapi_LightHandle *out) {
   ++calls;
   radiance = info->radiance;
+  bakingHint = REMIXAPI_LIGHT_BAKING_DEFAULT_EXT;
   const auto type = *static_cast<const remixapi_StructType *>(info->pNext);
   if (type == REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT)
     sphere = *static_cast<const remixapi_LightInfoSphereEXT *>(info->pNext);
@@ -23,6 +26,11 @@ remixapi_ErrorCode REMIXAPI_CALL capture(const remixapi_LightInfo *info, remixap
     distant = *static_cast<const remixapi_LightInfoDistantEXT *>(info->pNext);
   else
     require(false, "Unknown native light shape");
+  if (type == REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT && sphere.pNext) {
+    const auto &baking = *static_cast<const remixapi_LightInfoBakingEXT *>(sphere.pNext);
+    require(baking.sType == REMIXAPI_STRUCT_TYPE_LIGHT_BAKING_EXT, "Optional light hint uses its own extension");
+    bakingHint = baking.hint;
+  }
   *out = reject ? nullptr : reinterpret_cast<remixapi_LightHandle>(uintptr_t(info->hash));
   return reject ? REMIXAPI_ERROR_CODE_INVALID_ARGUMENTS : REMIXAPI_ERROR_CODE_SUCCESS;
 }
@@ -41,6 +49,7 @@ int main() {
   light.position[0] = 128;
   light.attenuation2 = 1;
   require(createLight(api, light, 123), "Point conversion failed");
+  require(bakingHint == REMIXAPI_LIGHT_BAKING_DEFAULT_EXT, "Explicit point lights retain default mixed policy");
   require(sphere.position.x == 128 && sphere.radius == 2 && !sphere.shaping_hasvalue,
           "Point positions/radii retain Source units and isotropic emission");
   require(std::abs(radiance.x * pi * sphere.radius * sphere.radius - 4) < 1e-5f,
@@ -49,6 +58,8 @@ int main() {
   light.type = kSurface;
   light.direction[2] = -7;
   require(createLight(api, light, 124), "Surface conversion failed");
+  require(bakingHint == REMIXAPI_LIGHT_BAKING_PREFER_BAKED_EXT,
+          "Surface emission supplies a generic baked preference without changing its sphere shape");
   require(sphere.shaping_hasvalue && sphere.shaping_value.direction.z == -1 &&
               sphere.shaping_value.coneAngleDegrees == 90 && sphere.shaping_value.coneSoftness == 0 &&
               sphere.shaping_value.focusExponent == 1,
