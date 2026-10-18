@@ -22,13 +22,14 @@ bool equivalent(const uint8_t *current, const std::vector<uint8_t> &previous) {
   uint64_t difference = 0;
   for (size_t i = 0; i < previous.size(); ++i) {
     const unsigned delta = unsigned(std::abs(int(current[i]) - int(previous[i])));
-    if (delta > 1 || (i % 4 == 3 && delta))
+    if (delta > 2 || (i % 4 == 3 && delta))
       return false;
     difference += delta;
   }
-  // At most 1/64 of an 8-bit RGB level on average. A uniform one-level
+  // Captured skies can differ by two byte levels after dithering/resampling.
+  // Bound their mean difference to 1/32 of one RGB level. A uniform one-level
   // exposure/colour change fails, as does any larger local change.
-  return difference <= (previous.size() / 4 * 3) / 64;
+  return difference <= (previous.size() / 4 * 3) / 32;
 }
 } // namespace
 

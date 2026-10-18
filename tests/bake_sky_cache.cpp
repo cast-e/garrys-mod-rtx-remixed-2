@@ -39,6 +39,24 @@ int main(int argc, char **argv) {
     require(noise.reused && noise.hash == first.hash && noise.pixels[0] == 100,
             "Reuse actual original pixels under sparse one-level noise");
     pixels[0] = 102;
+    const auto resampled = proxy::remix::canonicalBakeSky(source, 1, file);
+    require(resampled.reused && resampled.hash == first.hash && resampled.pixels[0] == 100,
+            "Two-level sparse resampling noise reuses the exact reference pixels");
+    {
+      auto bounded = pixels;
+      bounded[0] = 100;
+      auto budgetSource = source;
+      budgetSource.data = bounded.data();
+      const auto budgetFile = root / "budget.sky";
+      proxy::remix::canonicalBakeSky(budgetSource, 1, budgetFile);
+      for (size_t i = 0; i < 12; ++i) bounded[(i / 3) * 4 + i % 3] = 102;
+      require(proxy::remix::canonicalBakeSky(budgetSource, 1, budgetFile).reused,
+              "Capture noise at the mean error bound is accepted");
+      bounded[16] = 102;
+      require(!proxy::remix::canonicalBakeSky(budgetSource, 1, budgetFile).reused,
+              "Distributed noise exceeding the mean bound replaces the reference");
+    }
+    pixels[0] = 103;
     require(!proxy::remix::canonicalBakeSky(source, 1, file).reused, "Reject larger local change");
     require(!proxy::remix::canonicalBakeSky(source, 2, file).reused, "Reject scale change");
     for (size_t i = 0; i < pixels.size(); ++i)

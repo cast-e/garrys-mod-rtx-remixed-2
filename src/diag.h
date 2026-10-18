@@ -10,6 +10,8 @@ namespace proxy::diag {
 
 // DllMain: opens the log and installs the exception handlers.
 void install(HMODULE self);
+// DllMain detach: remove process callbacks before the DLL's code is unmapped.
+void uninstall();
 // The unhandled-exception filter again: the engine installs its own after ours.
 void reinstall();
 // Opt-in startup diagnostics: log engine Error() messages before forwarding them.
