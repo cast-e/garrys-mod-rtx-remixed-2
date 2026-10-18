@@ -73,10 +73,12 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
         else
           settings.height = dimension;
       } else if (key == "replay.measureFrames" || key == "replay.warmupFrames" ||
-                 key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights") {
+                 key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ||
+                 key == "replay.denoiseFrameDelayMs") {
         uint32_t number = 0;
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
-        const uint32_t maximum = key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ? 1 : 10000;
+        const uint32_t maximum = key == "replay.denoiseFrameDelayMs" ? 1000 :
+            key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ? 1 : 10000;
         if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || number > maximum ||
             (key == "replay.warmupFrames" && number < 16))
           throw std::runtime_error("Invalid measurement setting: " + key);
@@ -88,6 +90,8 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           settings.waitForBake = number != 0;
         else if (key == "replay.styledLights")
           settings.styledLights = number != 0;
+        else if (key == "replay.denoiseFrameDelayMs")
+          settings.denoiseFrameDelayMs = number;
         else
           settings.freezeAnimation = number != 0;
       } else if (key.rfind("replay.", 0) == 0)

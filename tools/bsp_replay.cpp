@@ -6,6 +6,7 @@
 #include "replay_settings.h"
 #include "replay_timing.h"
 #include <remix/remix_bake_ext.h>
+#include <cstring>
 #include <remix/remix_native_ext.h>
 #include <remix/remix_usd_ext.h>
 #include <windows.h>
@@ -414,7 +415,13 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       if (frame - measurementEnd >= 60)
         throw std::runtime_error("Published reflection probe report did not arrive within 60 presents");
     }
-    if (!measurement.enabled())
+    // Restrict the diagnostic delay to the asynchronous CPU/CUDA filtering
+    // stage. Transport scheduling and the finished-lighting timing window keep
+    // their normal submission cadence. The installed game is unaffected.
+    if (!stats.active && settings.denoiseFrameDelayMs &&
+        std::strstr(stats.status, "Denoising surface lightmaps"))
+      std::this_thread::sleep_for(std::chrono::milliseconds(settings.denoiseFrameDelayMs));
+    else if (!measurement.enabled())
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   if (measurement.enabled())

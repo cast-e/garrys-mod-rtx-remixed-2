@@ -79,6 +79,12 @@ int main() {
   refuse("replay.measureFrames=10001");
   refuse("replay.warmupFrames=0");
   refuse("replay.waitForBake=2");
+  require(parse("replay.denoiseFrameDelayMs=50").denoiseFrameDelayMs == 50 &&
+              parse("replay.denoiseFrameDelayMs=1000").denoiseFrameDelayMs == 1000 &&
+              parse("").denoiseFrameDelayMs == 0,
+          "Denoiser contention experiments have an explicit default-off bounded frame delay");
+  refuse("replay.denoiseFrameDelayMs=1001");
+  refuse("replay.denoiseFrameDelayMs=-1");
   require(parse("replay.warmupSeconds=2.5").warmupSeconds == 2.5f, "Timed GPU warmup is configurable");
   refuse("replay.warmupSeconds=-1");
   refuse("replay.warmupSeconds=61");

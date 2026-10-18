@@ -11,6 +11,7 @@ struct Settings {
   uint32_t width = 640, height = 360;
   uint32_t measureFrames = 0, warmupFrames = 120;
   float warmupSeconds = 3;
+  uint32_t denoiseFrameDelayMs = 0; // diagnostic: reduce rendering contention only during lightmap denoising
   bool waitForBake = true;
   bool styledLights = false; // explicit diagnostic authored-style playback
   float lightStyleValue = 1; // multiplier for all styled lights in the diagnostic snapshot
