@@ -14,13 +14,20 @@ Undo/redo, JSON import/export and Ctrl+S are available. Save atomically writes t
 file; reopening the same command loads it. A BSP SHA-256 fingerprint prevents using an authoring
 document against a different map revision. Close the server with Ctrl+C when finished.
 
+To start from a published automatic fit, add `--probe-report "D:/reports/probes.json"`. Select the
+report for this BSP explicitly: native probe reports currently contain no map fingerprint. Coordinates
+are imported in host units without applying `metersPerUnit` again. An unchanged dashed orange overlay
+shows the original fit while you edit; the Original fit checkbox hides it. Stable source IDs and the
+reference report fingerprint persist in saved documents for later fitting comparisons. An existing
+output file retains your edits when opened with a reference report.
+
 Coordinates use BSP units. `center`, positive `halfSize`, and `rotationDegrees` describe an oriented
 box. Rotation applies X then Y then Z (`Rz * Ry * Rx`); `capture` is independent in world space.
 `id` is stable across edits. Larger integer `priority` is intended to win overlapping regions.
 
 This first version displays world-brush edges and displacement base polygons. It does not display
-props, displaced terrain tessellation or materials. It does not yet load automatic probe exports,
-show a shaded cubemap preview, or apply the file in game. Renderer import, rotated projection bounds,
+props, displaced terrain tessellation or materials. It does not yet show a shaded cubemap preview
+or apply the file in game. Renderer import, rotated projection bounds,
 priority selection and reflection-only hot reload remain the next integration work. Do not treat
 saved documents as already-active game overrides.
 

@@ -40,6 +40,28 @@ class AuthoringData(unittest.TestCase):
             with self.subTest(key=key, bad=bad), self.assertRaises(ValueError):
                 document.validate(value, 'abc')
 
+    def test_native_report_import_preserves_host_units_and_provenance(self):
+        payload = json.dumps(dict(version=1, activeHash='1234', metersPerUnit=.0254,
+            probes=[dict(position=[256, 512, 128], minimum=[0, 128, 0], maximum=[512, 1024, 256])])).encode()
+        first = document.from_probe_report(payload, 'test', 'abc')
+        second = document.from_probe_report(payload, 'test', 'abc')
+        self.assertEqual(first, second)
+        volume = first['volumes'][0]
+        self.assertEqual(volume['capture'], [256, 512, 128])
+        self.assertEqual(volume['center'], [256, 576, 128])
+        self.assertEqual(volume['halfSize'], [256, 448, 128])
+        volume['center'][0] += 10
+        self.assertEqual(document.validate(first, 'abc')['reference'], first['reference'])
+        self.assertEqual(volume['capture'][0], 256)
+
+    def test_native_report_refuses_unpublished_and_invalid_bounds(self):
+        for active, lo, hi in [('0', [0, 0, 0], [1, 1, 1]),
+                              ('10', [0, 0, 0], [-1, 1, 1])]:
+            payload = json.dumps(dict(version=1, activeHash=active, metersPerUnit=.0254,
+                probes=[dict(position=[0, 0, 0], minimum=lo, maximum=hi)])).encode()
+            with self.assertRaises(ValueError):
+                document.from_probe_report(payload, 'test', 'abc')
+
     def test_geometry_from_world_model_only(self):
         # One triangle, plus an unrelated vertex which must not become an edge.
         lumps = {3: struct.pack('<12f', 0, 0, 0, 128, 0, 0, 0, 128, 0, 999, 999, 999),

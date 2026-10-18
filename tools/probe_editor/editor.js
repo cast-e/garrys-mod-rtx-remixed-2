@@ -103,6 +103,15 @@ function draw() {
       if(Math.max(a[0],b[0])<0||Math.min(a[0],b[0])>width||Math.max(a[1],b[1])<0||Math.min(a[1],b[1])>height)continue;
       ctx.moveTo(...a);ctx.lineTo(...b);
     }ctx.stroke();
+    if($('showReference').checked && world.referenceVolumes) {
+      ctx.save();ctx.strokeStyle='#d68b6c';ctx.setLineDash([4,5]);
+      for(const volume of world.referenceVolumes) {
+        const points=corners(volume).map(p=>screen(view,p));
+        for(let i=0;i<8;i++)for(let axis=0;axis<3;axis++)if(!(i&(1<<axis)))line(ctx,points[i],points[i|(1<<axis)]);
+        mark(ctx,screen(view,volume.capture),3,'#d68b6c');
+      }
+      ctx.restore();
+    }
     view.handles=[];
     data.volumes.forEach((volume,index)=>{
       const points=corners(volume).map(p=>screen(view,p)), chosen=index===selected;
@@ -181,6 +190,7 @@ for(const canvas of document.querySelectorAll('canvas')) {
   new ResizeObserver(draw).observe(canvas);
 }
 $('volumes').onchange=()=>select($('volumes').selectedIndex);
+$('showReference').onchange=draw;
 $('add').onclick=()=>{
   checkpoint();const center=data.volumes[selected]?.center || [views[0].center[0],views[0].center[1],views[1].center[1]];
   data.volumes.push({id:crypto.randomUUID(),name:`Cubemap ${data.volumes.length+1}`,priority:0,
@@ -212,5 +222,6 @@ window.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&eve
 try {
   [world,data]=await Promise.all([request('/scene'),request('/document')]);
   $('mapName').textContent=world.name;$('note').textContent=world.note;
+  $('referenceControl').hidden=!world.referenceVolumes;
   select(data.volumes.length?0:-1);$('frameMap').click();message('Ready');
 } catch(error) {message(error.message,true);}

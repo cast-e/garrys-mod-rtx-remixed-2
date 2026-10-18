@@ -18,10 +18,15 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--no-browser', action='store_true')
+    parser.add_argument('--probe-report', type=Path, help='Explicitly selected native probes.json for the reference fit')
     args = parser.parse_args()
     world = geometry.load(args.bsp)
     output = args.output.resolve()
     state = document.empty(world['name'], world['sha256'])
+    if args.probe_report:
+        reference = document.from_probe_report(args.probe_report.read_bytes(), world['name'], world['sha256'])
+        state = reference
+        world['referenceVolumes'] = reference['volumes']
     if output.exists():
         state = document.validate(json.loads(output.read_text(encoding='utf-8')), world['sha256'])
     token = secrets.token_urlsafe(24)
