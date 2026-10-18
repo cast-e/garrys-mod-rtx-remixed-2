@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <fcntl.h>
+#include <io.h>
 #include <remix/remix_native_ext.h>
 #include <remix/remix_bake_ext.h>
 
@@ -23,7 +25,17 @@ struct Recorder {
     const auto length = GetEnvironmentVariableW(L"OPENREMIX_PROXY_FRAME_PROFILE", path, 32768);
     if (!length || length >= 32768) return;
     // Never overwrite an earlier measurement accidentally.
-    file.reset(_wfopen(path, L"wx"));
+    const auto handle = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle != INVALID_HANDLE_VALUE) {
+      const int descriptor = _open_osfhandle(reinterpret_cast<intptr_t>(handle), _O_WRONLY | _O_TEXT);
+      if (descriptor >= 0) {
+        file.reset(_fdopen(descriptor, "w"));
+        if (!file) _close(descriptor);
+      } else {
+        CloseHandle(handle);
+      }
+    }
     if (!file) {
       diag::stage("Frame profile: cannot create new output file");
       return;
