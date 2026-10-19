@@ -145,6 +145,16 @@ median, nearest-rank p95, resolution, bake identity and per-pass summaries. Pass
 inclusive/self times can overlap through nesting; do not sum the pass rows into
 a frame total. The full-frame GPU duration is reported separately. Reports include
 host observation timestamps; GPU query results trail execution by several frames.
+When the runtime exports CPU diagnostics, measurement mode also writes `.host.csv`.
+It records host submission/Present wall time and unique completed CPU Present
+snapshots, including record, fence, setup, release and raster preparation times.
+Rows carry readiness, backend, bake identity and CPU attempt IDs. Startup rows are
+included: select ready rows inside the `.timings.json` observation interval for
+steady-state comparisons. CPU snapshots and delayed GPU results are independent;
+do not join their rows by position or sum nested CPU phases. Setup may include
+handoff/waiting rather than renderer-thread computation. The CSV refuses an
+existing output file and leaves installed game files untouched.
+
 These are GPU timings for the static replay, not game FPS or a quality-matched
 comparison between rendering techniques. The host exits after the window and a
 short screenshot drain; the command-line frame limit remains a timeout bound.

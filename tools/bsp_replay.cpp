@@ -5,6 +5,7 @@
 #include "bsp_world.h"
 #include "replay_settings.h"
 #include "replay_timing.h"
+#include "replay_host_profile.h"
 #include <remix/remix_bake_ext.h>
 #include <cstring>
 #include <remix/remix_native_ext.h>
@@ -314,6 +315,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       GetProcAddress(library, "remixapi_GetDenoisingStatisticsEXT"));
   proxy::replay::TimingWindow measurement(settings.measureFrames, settings.warmupFrames,
                                           settings.warmupSeconds);
+  proxy::replay::HostProfile hostProfile(library, output, measurement.enabled());
   if (measurement.enabled()) {
     if (!backendStatistics || !gpuStatistics || (settings.waitForBake && !statistics))
       throw std::runtime_error("Runtime lacks GPU measurement statistics");
@@ -329,6 +331,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   bool reportedPendingInputs = false;
   const auto start = Clock::now();
   for (unsigned frame = 0; frame < frames; ++frame) {
+    const auto frameStart = Clock::now();
     MSG message;
     while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
       TranslateMessage(&message);
@@ -345,6 +348,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     if (frame == frames - 3 || (measurementEnd != ~0u && frame == measurementEnd + 1))
       check(api.RequestPresentedScreenshot(output), "RequestPresentedScreenshot");
     check(api.Present(nullptr), "Present");
+    const double hostMs = std::chrono::duration<double, std::milli>(Clock::now() - frameStart).count();
     remixapi_BakeStatisticsEXT stats = {};
     stats.structSize = sizeof(stats);
     if (statistics) {
@@ -390,6 +394,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         std::fflush(stdout);
         reportedPendingInputs = true;
       }
+      hostProfile.sample(hostMs, ready, backend.activeBackend,
+                         backend.activeBackend == 2 ? stats.activeHash : 0);
       measurement.observe(ready, backend.activeBackend, backend.activeBackend == 2 ? stats.activeHash : 0,
                           timing);
       if (measurement.complete()) {
