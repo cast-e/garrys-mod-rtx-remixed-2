@@ -86,8 +86,11 @@ inline std::optional<Chart> capture(const Mapping &mapping, uint32_t firstIndex,
 inline std::vector<Chart> captureFan(const Mapping &mapping, uint32_t firstIndex,
                                      const std::vector<uint32_t> &indices, uint32_t vertexBase,
                                      const std::vector<std::array<float, 2>> &coordinates) {
-  if (auto full = capture(mapping, firstIndex, indices, vertexBase, coordinates))
-    return {std::move(*full)};
+  if (auto full = capture(mapping, firstIndex, indices, vertexBase, coordinates)) {
+    std::vector<Chart> result;
+    result.push_back(std::move(*full));
+    return result;
+  }
   if (firstIndex >= indices.size() || firstIndex % 3 || (indices.size() - firstIndex) % 3 ||
       mapping.size[0] < 1 || mapping.size[1] < 1 || mapping.size[0] >= 4096 || mapping.size[1] >= 4096)
     return {};
