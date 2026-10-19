@@ -1,3 +1,4 @@
+#include "sky_mesh_clip.h"
 #include "cubemap_overrides.h"
 #include "source_lights.h"
 #include "bsp_world.h"
@@ -693,6 +694,7 @@ struct PropPart {
   remixapi_MeshHandle mesh = nullptr;
   int material = -1;
   uint64_t replacementHash = 0;
+  std::vector<remixapi_HardcodedVertex> loadVertices; // temporary, released after sky placement clipping
   std::vector<float> positions; // model space, for occluders()
   std::vector<uint32_t> indices;
 };
@@ -786,6 +788,7 @@ struct World {
   std::vector<Material> materials;
   std::unordered_map<std::string, int> materialIndex;
   std::map<std::pair<std::string, int>, PropModel> propModels; // by model path and skin
+  std::vector<std::unique_ptr<PropModel>> clippedSkyModels; // stable per-placement ownership
   std::vector<Prop> props;
   // Point location at runtime (the camera of a view): BSP tree and leaf areas.
   std::vector<Node> nodes;
@@ -1179,8 +1182,9 @@ bool loadPropModel(const std::string &path, int skin, PropModel &out) {
           }
           for (const auto &v : partVertices)
             part.positions.insert(part.positions.end(), {v.position[0], v.position[1], v.position[2]});
+          if (g_world.skyTraced) part.loadVertices = std::move(partVertices);
           part.indices = std::move(partIndices);
-          out.parts.push_back(part);
+          out.parts.push_back(std::move(part));
           ++g_world.propParts;
         }
       }
@@ -1735,6 +1739,10 @@ void destroyMeshes() {
     for (auto &part : model.parts)
       if (part.mesh && g_world.api)
         g_world.api->DestroyMesh(part.mesh);
+  for (auto &model : g_world.clippedSkyModels)
+    for (auto &part : model->parts)
+      if (part.mesh && g_world.api)
+        g_world.api->DestroyMesh(part.mesh);
   for (auto &[key, group] : g_world.groups)
     if (group.mesh && g_world.api)
       g_world.api->DestroyMesh(group.mesh);
@@ -1766,8 +1774,9 @@ bool insidePlayable(const Bsp &bsp, const float p[3]) {
 // Clips a convex polygon against the map's BSP: the pieces outside playable
 // space (solid, or beyond the map) go to `out`. `split` reports any cut or
 // drop, so an untouched polygon can keep its original vertices.
+struct SkyClipResult { bool split = false, removed = false; };
 void clipOutsidePlayable(const Bsp &bsp, int index, std::vector<remixapi_HardcodedVertex> polygon,
-                         std::vector<std::vector<remixapi_HardcodedVertex>> &out, bool &split, int depth = 0) {
+                         std::vector<std::vector<remixapi_HardcodedVertex>> &out, SkyClipResult &result, int depth = 0) {
   const auto [nodes, nodeCount] = bsp.lump<Node>(kNodes);
   const auto [planes, planeCount] = bsp.lump<Plane>(kPlanes);
   if (polygon.size() < 3)
@@ -1775,7 +1784,7 @@ void clipOutsidePlayable(const Bsp &bsp, int index, std::vector<remixapi_Hardcod
   if (index < 0) {
     const int leaf = -1 - index;
     if (size_t(leaf) < g_world.leafPlayable.size() && g_world.leafPlayable[leaf]) {
-      split = true;
+      result.split = result.removed = true;
       return;
     }
     out.push_back(std::move(polygon));
@@ -1786,7 +1795,7 @@ void clipOutsidePlayable(const Bsp &bsp, int index, std::vector<remixapi_Hardcod
     return;
   }
   const Plane &plane = planes[nodes[index].plane];
-  constexpr float kEpsilon = 0.01f;
+  constexpr float kEpsilon = .01f;
   std::vector<float> d(polygon.size());
   bool front = false, back = false;
   for (size_t i = 0; i < polygon.size(); ++i) {
@@ -1795,10 +1804,10 @@ void clipOutsidePlayable(const Bsp &bsp, int index, std::vector<remixapi_Hardcod
     back |= d[i] < -kEpsilon;
   }
   if (!back) // on the plane counts as in front, as leafAt does
-    return clipOutsidePlayable(bsp, nodes[index].children[0], std::move(polygon), out, split, depth + 1);
+    return clipOutsidePlayable(bsp, nodes[index].children[0], std::move(polygon), out, result, depth + 1);
   if (!front)
-    return clipOutsidePlayable(bsp, nodes[index].children[1], std::move(polygon), out, split, depth + 1);
-  split = true;
+    return clipOutsidePlayable(bsp, nodes[index].children[1], std::move(polygon), out, result, depth + 1);
+  result.split = true;
   auto lerp = [](const remixapi_HardcodedVertex &a, const remixapi_HardcodedVertex &b, float t) {
     remixapi_HardcodedVertex v = a;
     for (int k = 0; k < 3; ++k) {
@@ -1831,8 +1840,8 @@ void clipOutsidePlayable(const Bsp &bsp, int index, std::vector<remixapi_Hardcod
       backPart.push_back(v);
     }
   }
-  clipOutsidePlayable(bsp, nodes[index].children[0], std::move(frontPart), out, split, depth + 1);
-  clipOutsidePlayable(bsp, nodes[index].children[1], std::move(backPart), out, split, depth + 1);
+  clipOutsidePlayable(bsp, nodes[index].children[0], std::move(frontPart), out, result, depth + 1);
+  clipOutsidePlayable(bsp, nodes[index].children[1], std::move(backPart), out, result, depth + 1);
 }
 
 void noteSkyReach(const float p[3]) {
@@ -1842,6 +1851,62 @@ void noteSkyReach(const float p[3]) {
     d2 += (p[k] - c) * (p[k] - c);
   }
   g_world.skyReach = std::max(g_world.skyReach, std::sqrt(d2));
+}
+
+// Shared original meshes remain available to placements which need no cut.
+// A cut placement keeps its model transform and replacement hash; only its base
+// mesh changes, so material/mesh replacement lookup retains the original identity.
+const PropModel *clipSkyProp(const Bsp &bsp, const PropModel &source, const float (&transform)[3][4]) {
+  std::vector<sky::ClippedMesh> parts;
+  bool changed = false;
+  for (const auto &part : source.parts) {
+    parts.push_back(sky::clipPlacedMesh(part.loadVertices, part.indices, transform,
+        [&](sky::Polygon triangle, std::vector<sky::Polygon> &pieces) {
+          SkyClipResult result;
+          clipOutsidePlayable(bsp, 0, std::move(triangle), pieces, result);
+          return result.removed;
+        }));
+    changed |= parts.back().changed;
+  }
+  if (!changed) return &source;
+  auto model = std::make_unique<PropModel>();
+  model->engineParts = source.engineParts;
+  model->missingBakeOccluders = source.missingBakeOccluders;
+  model->additiveEngineParts = source.additiveEngineParts;
+  model->engineMaterials = source.engineMaterials;
+  for (size_t i = 0; i < parts.size(); ++i) {
+    auto &geometry = parts[i];
+    if (geometry.indices.empty()) continue;
+    remixapi_MeshInfoSurfaceTriangles surface{};
+    surface.vertices_values = geometry.vertices.data();
+    surface.vertices_count = geometry.vertices.size();
+    surface.indices_values = geometry.indices.data();
+    surface.indices_count = geometry.indices.size();
+    remixapi_MeshInfo info{};
+    info.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
+    auto hash = XXH3_64bits_withSeed(geometry.vertices.data(), geometry.vertices.size() * sizeof(sky::Vertex),
+                                  source.parts[i].replacementHash);
+    info.hash = XXH3_64bits_withSeed(geometry.indices.data(), geometry.indices.size() * sizeof(uint32_t), hash) | 1;
+    info.surfaces_values = &surface;
+    info.surfaces_count = 1;
+    PropPart part;
+    part.material = source.parts[i].material;
+    part.replacementHash = source.parts[i].replacementHash;
+    if (g_world.api->CreateMesh(&info, &part.mesh) != REMIXAPI_ERROR_CODE_SUCCESS) {
+      for (auto &made : model->parts) g_world.api->DestroyMesh(made.mesh);
+      ++g_world.propModelsFailed; // refuse an incomplete map bake; engine retains fallback ownership
+      std::fprintf(stderr, "Clipped sky prop mesh upload failed\n");
+      return nullptr;
+    }
+    for (const auto &vertex : geometry.vertices)
+      part.positions.insert(part.positions.end(), std::begin(vertex.position), std::end(vertex.position));
+    part.indices = std::move(geometry.indices);
+    model->parts.push_back(std::move(part));
+  }
+  if (model->parts.empty()) return nullptr;
+  const auto *result = model.get();
+  g_world.clippedSkyModels.push_back(std::move(model));
+  return result;
 }
 
 template <typename InSky> void loadProps(const Bsp &bsp, const InSky &inSky) {
@@ -1925,24 +1990,35 @@ template <typename InSky> void loadProps(const Bsp &bsp, const InSky &inSky) {
         continue;
       float moved[3];
       skyToWorld(origin, moved);
-      if (insidePlayable(bsp, moved)) {
-        ++g_world.skyStandInProps;
-        continue;
-      }
       for (int r = 0; r < 3; ++r) {
         for (int c = 0; c < 3; ++c)
           prop.transform[r][c] *= g_world.skyScale;
         prop.transform[r][3] = moved[r];
       }
+      try {
+        prop.model = clipSkyProp(bsp, it->second, prop.transform);
+      } catch (const std::exception &error) {
+        ++g_world.propModelsFailed;
+        std::fprintf(stderr, "Sky prop clipping refused %s: %s\n", path.c_str(), error.what());
+        continue;
+      }
+      if (!prop.model) {
+        ++g_world.skyStandInProps;
+        continue;
+      }
       noteSkyReach(moved);
       ++g_world.skyTracedProps;
       prop.skyTraced = true;
-    }
-    prop.model = &it->second;
+    } else prop.model = &it->second;
     prop.id = XXH3_64bits_withSeed(&p, sizeof(p), 0x70726f70ull) | 1;
     g_world.propCells[propCell(origin)].push_back(uint32_t(g_world.props.size()));
     g_world.props.push_back(prop);
   }
+  // The API copied vertices at CreateMesh. Retain only the existing compact
+  // position/index occluders; full attributes were needed solely during loading.
+  for (auto &[key, model] : g_world.propModels)
+    for (auto &part : model.parts)
+      std::vector<remixapi_HardcodedVertex>().swap(part.loadVertices);
 }
 
 // A face's triangles in world space (displacements tessellated).
@@ -2602,19 +2678,19 @@ bool build(const Bsp &bsp) {
       std::vector<std::vector<remixapi_HardcodedVertex>> pieces;
       for (size_t i = 0; i + 2 < triangles.size(); i += 3) {
         pieces.clear();
-        bool split = false;
+        SkyClipResult clipped;
         clipOutsidePlayable(bsp, 0,
                             {g.vertices[triangles[i]], g.vertices[triangles[i + 1]], g.vertices[triangles[i + 2]]},
-                            pieces, split);
+                            pieces, clipped);
         pieces.erase(std::remove_if(pieces.begin(), pieces.end(),
                                     [&](const auto &piece) {
                                       const bool coplanar = onWorldFace(piece);
                                       g_world.skyCoplanarPieces += coplanar && count;
-                                      split |= coplanar;
+                                      clipped.split |= coplanar;
                                       return coplanar;
                                     }),
                      pieces.end());
-        if (!split) {
+        if (!clipped.split) {
           g.indices.insert(g.indices.end(), triangles.begin() + i, triangles.begin() + i + 3);
           g_world.skyTracedTriangles += count;
           continue;
@@ -3806,7 +3882,7 @@ void dumpStatistics(FILE *out) {
   fprintf(out,
           "   BSP world %s: faces %u displacements %u (sky %u) triangles %u | materials %u/%zu resolved | groups %zu "
           "(meshes %u) | left to the engine: translucent %u, ignored %u | rtx.conf-ignored brush materials kept %u | sky camera %d\n"
-          "   BSP static props: %zu placements (%u in the 3D skybox left to the engine), %zu models (%u failed), %u parts | overlays %u "
+          "   BSP static props: %zu placements (%u in the 3D skybox), %zu models (%u failed), %u parts | overlays %u "
           "(%u triangles, %zu groups) | water materials %u, with normal maps %u (animated %u; "
           "OPENREMIX_PROXY_WATER_NORMALS), downward faces left out %u%s%s\n",
           g_world.map.c_str(), g_world.faces, g_world.displacements, g_world.skyFaces, g_world.triangles, resolved,
@@ -3863,9 +3939,10 @@ void dumpStatistics(FILE *out) {
   }
   if (g_world.skyTraced)
     fprintf(out, "   3D skybox path traced: %u triangles, %u clipped at the map, %u props (in playable space: %u "
-            "triangles, %u props; pieces on world faces %u), reach %.0f\n",
+            "triangles, %u props; pieces on world faces %u), %zu clipped prop models, reach %.0f\n",
             g_world.skyTracedTriangles, g_world.skyClippedTriangles, g_world.skyTracedProps,
-            g_world.skyStandInTriangles, g_world.skyStandInProps, g_world.skyCoplanarPieces, g_world.skyReach);
+            g_world.skyStandInTriangles, g_world.skyStandInProps, g_world.skyCoplanarPieces,
+            g_world.clippedSkyModels.size(), g_world.skyReach);
   {
     // Unresolved materials: no predictable texture hash (VTF missing or its
     // format not modelled) vs. a hash the engine never uploaded.

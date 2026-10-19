@@ -192,6 +192,13 @@ altitude; substantial folds and invalid mappings retain whole-face probe fallbac
 Native overlap validation remains unchanged.
 
 
+Merged 3D-skybox props are clipped by triangle against playable BSP regions,
+like the merged sky world geometry. Testing only a prop's origin cannot prevent
+a large tree card from extending into a room. Clipped base meshes retain their
+model-space transform, material attributes and original replacement identity.
+Untouched placements share the original mesh. Temporary full vertex attributes
+are released after loading; changed placements own their meshes until map unload.
+
 Static props preserve both alpha testing and ordinary alpha blending. An
 alpha-tested material may also set `$translucent`; texture alpha still selects
 cutout coverage, following Source's `EvaluateBlendRequirements`. Constant or
