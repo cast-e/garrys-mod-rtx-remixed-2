@@ -125,3 +125,34 @@ def from_probe_report(payload, map_name, map_hash):
                       rotationDegrees=rotation, capture=vector(probe.get('position'), 'position'))
         result['volumes'].append(volume)
     return validate(result, map_hash)
+
+
+def runtime_binary(value):
+    """Bounded adapter sidecar; JSON remains the editable source of truth."""
+    import struct
+    clean = validate(value, value.get('mapSha256'))
+    digest = clean['mapSha256']
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+        raise ValueError('Runtime export requires a BSP SHA-256 fingerprint')
+    if len(clean['volumes']) > 32:
+        raise ValueError('The renderer currently supports at most 32 authored cubemaps')
+    result = bytearray(b'BSPCUBE1' + bytes.fromhex(digest) + struct.pack('<I', len(clean['volumes'])))
+    identities = set()
+    for volume in clean['volumes']:
+        identity = int.from_bytes(hashlib.sha256(volume['id'].encode()).digest()[:8], 'little') or 1
+        if identity in identities:
+            raise ValueError('Cubemap runtime ID collision')
+        identities.add(identity)
+        x,y,z = [math.radians(v) for v in volume['rotationDegrees']]
+        cx,sx,cy,sy,cz,sz = math.cos(x),math.sin(x),math.cos(y),math.sin(y),math.cos(z),math.sin(z)
+        rotation = [[cz*cy, cz*sy*sx-sz*cx, cz*sy*cx+sz*sx],
+                    [sz*cy, sz*sy*sx+cz*cx, sz*sy*cx-cz*sx], [-sy, cy*sx, cy*cx]]
+        rows = [[rotation[c][r] for c in range(3)] for r in range(3)]
+        for row in rows:
+            row.append(-sum(a*b for a,b in zip(row, volume['center'])))
+        local = [sum(row[c]*volume['capture'][c] for c in range(3))+row[3] for row in rows]
+        if any(abs(v) > h for v,h in zip(local, volume['halfSize'])):
+            raise ValueError('A runtime capture point must lie inside its projection volume')
+        result.extend(struct.pack('<Q6f12f3fi', identity, *[-h for h in volume['halfSize']],
+            *volume['halfSize'], *[v for row in rows for v in row], *volume['capture'], volume['priority']))
+    return bytes(result)

@@ -17,6 +17,7 @@ if sdl_inc == ''
 endif
 
 subdir('deps/dxso')
+bcrypt_dep = meson.get_compiler('cpp').find_library('bcrypt')
 
 # The proxy's own host-pass shaders (src/shaders), SPIR-V as C arrays.
 glslang = find_program('glslangValidator')
@@ -29,13 +30,13 @@ endforeach
 
 shared_library('shaderapidx9',
   'src/main.cpp', 'src/vtable_proxy.cpp', 'src/d3d_hooks.cpp', 'src/remix_output.cpp', 'src/texture_formats.cpp',
-  'src/dxvk_hash.cpp', 'src/texture_categories.cpp', 'src/source_fs.cpp', 'src/bsp_world.cpp', 'src/engine_hooks.cpp',
+  'src/dxvk_hash.cpp', 'src/texture_categories.cpp', 'src/source_fs.cpp', 'src/bsp_world.cpp', 'src/cubemap_overrides.cpp', 'src/engine_hooks.cpp',
   'src/remix_ui.cpp', 'src/engine_patches.cpp', 'src/engine_lights.cpp', 'src/engine_shadows.cpp',
   'src/engine_materials.cpp', 'src/material_shading.cpp', 'src/engine_nocull.cpp', 'src/pbr_rules.cpp',
   'src/vertex_program.cpp', 'src/particles.cpp', 'src/diag.cpp', 'src/lzma_source.cpp', 'src/host_passes.cpp', 'src/bake_sky.cpp',
   'src/bake_sky_cache.cpp', 'src/source_lights.cpp', 'src/styled_lights.cpp', 'src/frame_profile.cpp', 'deps/lzma/LzmaDec.c', host_shaders,
   include_directories: include_directories(remix_inc, sdl_inc, 'deps/xxhash'),
-  dependencies: [dxso_dep],
+  dependencies: [dxso_dep, bcrypt_dep],
   name_prefix: '',
   vs_module_defs: 'shaderapidx9.def',
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'],
@@ -55,11 +56,11 @@ test('Source loose and VPK relative model paths', source_fs_test,
 
 # A diagnostic map host: reads installed content without injecting into the game.
 executable('bsp-replay', 'tools/bsp_replay.cpp', 'tools/replay_settings.cpp', 'tools/replay_timing.cpp',
-  'src/bsp_world.cpp', 'src/source_fs.cpp', 'src/lzma_source.cpp',
+  'src/bsp_world.cpp', 'src/cubemap_overrides.cpp', 'src/source_fs.cpp', 'src/lzma_source.cpp',
   'src/texture_formats.cpp', 'src/texture_categories.cpp', 'src/pbr_rules.cpp',
   'src/material_shading.cpp', 'src/source_lights.cpp', 'src/styled_lights.cpp', 'deps/lzma/LzmaDec.c',
   include_directories: include_directories('src', remix_inc, 'deps/xxhash'),
-  dependencies: meson.get_compiler('cpp').find_library('user32'),
+  dependencies: [meson.get_compiler('cpp').find_library('user32'), bcrypt_dep],
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 
 replay_settings_test = executable('replay-settings-test', 'tests/replay_settings.cpp', 'tools/replay_settings.cpp',
@@ -116,3 +117,9 @@ styled_lights_test = executable('styled-lights-test', 'tests/styled_lights.cpp',
   include_directories: include_directories('src', remix_inc),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('Styled light immutable capture and live identity', styled_lights_test)
+
+cubemap_overrides_test = executable('cubemap-overrides-test', 'tests/cubemap_overrides.cpp', 'src/cubemap_overrides.cpp',
+  include_directories: include_directories('src', remix_inc), dependencies: bcrypt_dep,
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Cubemap authoring sidecar fingerprint and live publication', cubemap_overrides_test,
+  args: [meson.current_build_dir() / 'cubemap-overrides-readback'])

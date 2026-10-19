@@ -78,6 +78,32 @@ class AuthoringData(unittest.TestCase):
             with self.assertRaises(ValueError):
                 document.from_probe_report(payload, 'test', 'abc')
 
+    def test_runtime_sidecar_layout_rotation_and_capacity(self):
+        import hashlib
+        value = document.empty('test', hashlib.sha256(b'abc').hexdigest())
+        volume = document.new_volume([10, 20.25, 30])
+        volume.update(center=[10, 20, 30], halfSize=[2, .5, 1], rotationDegrees=[0, 0, 90], priority=-12)
+        value['volumes'] = [volume]
+        encoded = document.runtime_binary(value)
+        self.assertEqual(encoded, document.runtime_binary(value))
+        self.assertEqual(encoded[:8], b'BSPCUBE1')
+        self.assertEqual(encoded[8:40], hashlib.sha256(b'abc').digest())
+        self.assertEqual(len(encoded), 44+96)
+        self.assertEqual(struct.unpack_from('<I', encoded, 40)[0], 1)
+        record = struct.unpack_from('<Q6f12f3fi', encoded, 44)
+        self.assertNotEqual(record[0], 0)
+        self.assertEqual(record[1:7], (-2, -.5, -1, 2, .5, 1))
+        for actual, expected in zip(record[7:19], (0,1,0,-20,-1,0,0,10,0,0,1,-30)):
+            self.assertAlmostEqual(actual, expected, places=5)
+        self.assertEqual(record[19:22], (10,20.25,30))
+        self.assertEqual(record[22], -12)
+        volume['capture'] = [100, 20, 30]
+        with self.assertRaises(ValueError):
+            document.runtime_binary(value)
+        value['volumes'] = [dict(document.new_volume([0,0,0]), id=str(i)) for i in range(33)]
+        with self.assertRaises(ValueError):
+            document.runtime_binary(value)
+
     def test_geometry_from_world_model_only(self):
         # One triangle, plus an unrelated vertex which must not become an edge.
         lumps = {3: struct.pack('<12f', 0, 0, 0, 128, 0, 0, 0, 128, 0, 999, 999, 999),

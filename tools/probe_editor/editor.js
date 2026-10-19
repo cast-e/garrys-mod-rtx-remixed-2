@@ -10,6 +10,7 @@ const request = async (path, options = {}) => {
 };
 const copy = value => structuredClone(value);
 let world, data, selected = -1, dirty = false, history = [], future = [];
+let saveTimer, saving = false, saveRequested = false, editVersion = 0;
 const views = [];
 const add = (a,b) => a.map((v,i) => v+b[i]);
 const sub = (a,b) => a.map((v,i) => v-b[i]);
@@ -25,7 +26,15 @@ function corners(volume) {
 }
 function message(text, error=false) { $('status').textContent=text; $('status').style.color=error?'#ff9b8e':'#88d8c5'; }
 function checkpoint() { history.push(copy(data)); if(history.length>100)history.shift(); future=[]; }
-function changed(rebuild=false) { dirty=true; message('Unsaved changes'); if(rebuild)properties(); list(); draw(); }
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => $('save').click(), 500);
+}
+function changed(rebuild=false) {
+  dirty=true; editVersion++; message('Unsaved changes');
+  if(rebuild)properties(); list(); draw();
+  if($('live').checked) scheduleSave();
+}
 function list() {
   const control=$('volumes'); control.replaceChildren();
   data.volumes.forEach((volume,index)=>{
@@ -50,7 +59,7 @@ function properties() {
       input.addEventListener('change',()=>{
         const next=key==='name'?input.value:Number(input.value);
         if(key!=='name'&&(!Number.isFinite(next)||Math.abs(next)>1e8||
-           (key==='halfSize'&&next<=0)||(key==='priority'&&(!Number.isInteger(next)||Math.abs(next)>32767)))) {
+           (key==='halfSize'&&next<=0)||(key==='priority'&&(!Number.isInteger(next)||next < -32768||next > 32767)))) {
           input.value=value; message('Invalid value',true); return;
         }
         checkpoint();
@@ -202,7 +211,22 @@ $('undo').onclick=()=>{if(!history.length)return;future.push(copy(data));data=hi
 $('redo').onclick=()=>{if(!future.length)return;history.push(copy(data));data=future.pop();selected=Math.min(selected,data.volumes.length-1);changed(true);};
 $('frameMap').onclick=()=>frame(world.lines.flatMap(line=>[line.slice(0,3),line.slice(3)]));
 $('focus').onclick=()=>{const volume=data.volumes[selected];if(volume)frame([...corners(volume),volume.capture]);};
-$('save').onclick=async()=>{try{const result=await request('/document',{method:'POST',body:JSON.stringify(data)});dirty=false;message(`Saved ${result.saved}`);}catch(error){message(error.message,true);}};
+$('save').onclick=async()=>{
+  if(saving) { saveRequested=true; return; }
+  saving=true;
+  const version=editVersion, payload=JSON.stringify(data);
+  try {
+    const result=await request('/document',{method:'POST',body:payload});
+    if(editVersion===version) { dirty=false; message(`Saved ${result.saved}`); }
+  } catch(error) { message(error.message,true); }
+  finally {
+    saving=false;
+    if(saveRequested || ($('live').checked && editVersion!==version)) {
+      saveRequested=false; scheduleSave();
+    }
+  }
+};
+$('live').onchange=()=>{ if($('live').checked && dirty) scheduleSave(); else clearTimeout(saveTimer); };
 $('export').onclick=()=>{
   const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'}));
   const link=document.createElement('a');link.href=url;link.download=`${world.name}.cubemaps.json`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -221,6 +245,7 @@ window.onbeforeunload=event=>{if(dirty){event.preventDefault();event.returnValue
 window.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();$('save').click();}});
 try {
   [world,data]=await Promise.all([request('/scene'),request('/document')]);
+  $('live').checked=!!world.runtimeLive;
   $('mapName').textContent=world.name;$('note').textContent=world.note;
   $('referenceControl').hidden=!world.referenceVolumes;
   select(data.volumes.length?0:-1);$('frameMap').click();message('Ready');

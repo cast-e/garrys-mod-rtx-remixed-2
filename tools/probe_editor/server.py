@@ -16,12 +16,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bsp', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--runtime-output', type=Path, help='Optional live adapter .cubemaps.bin destination')
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--no-browser', action='store_true')
     parser.add_argument('--probe-report', type=Path, help='Explicitly selected native probes.json for the reference fit')
     args = parser.parse_args()
     world = geometry.load(args.bsp)
     output = args.output.resolve()
+    if args.runtime_output and args.runtime_output.resolve() == output:
+        parser.error('Runtime sidecar must differ from the authoring JSON')
+    world['runtimeLive'] = bool(args.runtime_output)
     state = document.empty(world['name'], world['sha256'])
     if args.probe_report:
         reference = document.from_probe_report(args.probe_report.read_bytes(), world['name'], world['sha256'])
@@ -71,6 +75,7 @@ def main():
                 if length <= 0 or length > 4 * 1024 * 1024:
                     raise ValueError('Invalid document size')
                 value = document.validate(json.loads(self.rfile.read(length)), world['sha256'])
+                runtime = document.runtime_binary(value) if args.runtime_output else None
                 with lock:
                     output.parent.mkdir(parents=True, exist_ok=True)
                     temporary = output.with_name(output.name + '.tmp')
@@ -80,6 +85,15 @@ def main():
                         stream.flush()
                         os.fsync(stream.fileno())
                     os.replace(temporary, output)
+                    if args.runtime_output:
+                        destination = args.runtime_output.resolve()
+                        destination.parent.mkdir(parents=True, exist_ok=True)
+                        temporary_runtime = destination.with_name(destination.name + '.tmp')
+                        with temporary_runtime.open('wb') as stream:
+                            stream.write(runtime)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(temporary_runtime, destination)
                     state = value
                 self.respond(200, {'saved': str(output)})
             except (ValueError, OSError) as error:

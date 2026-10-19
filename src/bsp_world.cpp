@@ -1,3 +1,4 @@
+#include "cubemap_overrides.h"
 #include "source_lights.h"
 #include "bsp_world.h"
 #include "bake_charts.h"
@@ -1663,6 +1664,8 @@ SecondLayer secondLayer(int base, bool use) {
   return out;
 }
 
+proxy::cubemaps::Watcher g_cubemapOverrides;
+
 constexpr uint64_t kBatchId = 0x42535057; // "BSPW"
 
 // The runtime's scene instances (in process: resolved from remix.dll).
@@ -1672,6 +1675,8 @@ template <typename Fn> Fn sceneFunction(const char *name) {
 }
 
 void invalidateBakeScene() {
+  if (auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT"))
+    publish(nullptr);
   if (auto publish = sceneFunction<PFN_remixapi_SetBakeSceneEXT>("remixapi_SetBakeSceneEXT")) {
     if (g_world.map.empty()) {
       publish(nullptr);
@@ -3064,6 +3069,17 @@ bool load(const remixapi_Interface &api, const std::string &requestedMap, bool l
     sendPartition(nullptr);
     return false;
   }
+  {
+    wchar_t overridePath[32768]{};
+    const auto length = GetEnvironmentVariableW(L"OPENREMIX_PROXY_CUBEMAP_BOUNDS", overridePath, 32768);
+    const auto destination = length && length < 32768 ? std::filesystem::path(overridePath)
+        : std::filesystem::path(gameRoot()) / L"garrysmod/data/openremix/cubemaps" / (mapName + ".cubemaps.bin");
+    try {
+      g_cubemapOverrides.configure(bsp.data, XXH3_64bits(mapName.data(), mapName.size()) | 1, destination);
+    } catch (const std::exception &error) {
+      std::fprintf(stderr, "Cubemap authoring unavailable: %s\n", error.what());
+    }
+  }
   sendPartition(&bsp);
   if (!enabled)
     return false;
@@ -3112,6 +3128,8 @@ bool overlaysActive() { return g_active && !g_world.overlayGroups.empty(); }
 
 void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
                       const std::vector<remixapi_BakeStyledLightEXT> &styled) {
+  static const auto publishCubemaps = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT");
+  if (g_active) g_cubemapOverrides.poll(publishCubemaps);
   static const auto publish = sceneFunction<PFN_remixapi_SetBakeSceneEXT>("remixapi_SetBakeSceneEXT");
   if (!publish) {
     g_world.bakeReason = "native bake-scene API unavailable";
