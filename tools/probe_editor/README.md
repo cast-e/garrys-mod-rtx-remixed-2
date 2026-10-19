@@ -80,7 +80,7 @@ For another install, invoke `python -m probe_editor` with an explicit `--runtime
 The adapter's `OPENREMIX_PROXY_CUBEMAP_BOUNDS` environment variable can select a diagnostic sidecar
 instead of the default map-specific path. The JSON itself is not parsed by the game.
 
-The current runtime supports at most 32 authored volumes, and capture points must remain inside
+The matching OpenRemix SDK/runtime supports at most 64 authored volumes, and capture points must remain inside
 their projection bounds. Rotation and signed overlap priority are supported. Bounds/priority changes
 reuse filtered radiance without new rays. Moving or adding a capture traces only the affected cubemap;
 scene acceleration is reused during the authoring session. Completed lightmaps and diffuse probes

@@ -5,6 +5,7 @@
 #include <thread>
 #include <stdexcept>
 using namespace proxy::cubemaps;
+static_assert(REMIXAPI_REFLECTION_VOLUMES_MAX_EXT >= 64, "Use the matching OpenRemix SDK for 64-volume authoring");
 namespace {
   unsigned calls = 0, clears = 0;
   uint64_t revision = 0;
@@ -31,11 +32,20 @@ int main(int argc, char **argv) try {
   remixapi_ReflectionVolumeEXT volume{}; volume.id = 19; volume.priority = -7;
   std::memcpy(bytes.data()+44, &volume, sizeof(volume));
   require(decode(bytes, hash).front().priority == -7, "Packed sidecar preserves signed priorities");
+  auto full = bytes;
+  const uint32_t maximum = REMIXAPI_REFLECTION_VOLUMES_MAX_EXT;
+  full.resize(44 + size_t(maximum) * sizeof(volume));
+  std::memcpy(full.data()+40, &maximum, 4);
+  for (uint32_t i = 0; i < maximum; ++i) {
+    auto entry = volume; entry.id = i + 1;
+    std::memcpy(full.data()+44+size_t(i)*sizeof(entry), &entry, sizeof(entry));
+  }
+  require(decode(full, hash).size() == maximum, "The complete authored volume quota decodes without truncation");
   auto bad = hash; bad[0] ^= 1;
   bool rejected = false;
   try { decode(bytes, bad); } catch (const std::exception &) { rejected = true; }
   require(rejected, "Another BSP revision cannot pass fingerprint validation");
-  auto oversized = bytes; const uint32_t excessive = 33; std::memcpy(oversized.data()+40, &excessive, 4);
+  auto oversized = bytes; const uint32_t excessive = REMIXAPI_REFLECTION_VOLUMES_MAX_EXT + 1; std::memcpy(oversized.data()+40, &excessive, 4);
   rejected = false;
   try { decode(oversized, hash); } catch (const std::exception &) { rejected = true; }
   require(rejected, "Oversized volume arrays are refused before allocation");

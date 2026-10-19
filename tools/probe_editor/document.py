@@ -4,6 +4,8 @@ import uuid
 import hashlib
 import json
 
+MAX_RUNTIME_VOLUMES = 64
+
 
 def vector(value, name, positive=False):
     if not isinstance(value, list) or len(value) != 3:
@@ -134,8 +136,8 @@ def runtime_binary(value):
     digest = clean['mapSha256']
     if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
         raise ValueError('Runtime export requires a BSP SHA-256 fingerprint')
-    if len(clean['volumes']) > 32:
-        raise ValueError('The renderer currently supports at most 32 authored cubemaps')
+    if len(clean['volumes']) > MAX_RUNTIME_VOLUMES:
+        raise ValueError(f'The renderer currently supports at most {MAX_RUNTIME_VOLUMES} authored cubemaps')
     result = bytearray(b'BSPCUBE1' + bytes.fromhex(digest) + struct.pack('<I', len(clean['volumes'])))
     identities = set()
     for volume in clean['volumes']:

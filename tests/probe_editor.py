@@ -100,7 +100,11 @@ class AuthoringData(unittest.TestCase):
         volume['capture'] = [100, 20, 30]
         with self.assertRaises(ValueError):
             document.runtime_binary(value)
-        value['volumes'] = [dict(document.new_volume([0,0,0]), id=str(i)) for i in range(33)]
+        value['volumes'] = [dict(document.new_volume([0,0,0]), id=str(i)) for i in range(64)]
+        encoded = document.runtime_binary(value)
+        self.assertEqual(struct.unpack_from('<I', encoded, 40)[0], 64)
+        self.assertEqual(len(encoded), 44 + 64 * 96)
+        value['volumes'].append(dict(document.new_volume([0,0,0]), id='overflow'))
         with self.assertRaises(ValueError):
             document.runtime_binary(value)
 
