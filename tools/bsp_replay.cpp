@@ -344,7 +344,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     // The production publisher owns readiness checks. Calling it while assets
     // resolve also reports the actual reason, rather than hiding it behind this
     // diagnostic host's generic "waiting for retained map inputs" state.
-    proxy::bsp::publishBakeScene(bakeLights, styledLights);
+    proxy::bsp::publishBakeScene(bakeLights, styledLights, settings.probeBounds ? &*settings.probeBounds : nullptr);
     if (frame == frames - 3 || (measurementEnd != ~0u && frame == measurementEnd + 1))
       check(api.RequestPresentedScreenshot(output), "RequestPresentedScreenshot");
     check(api.Present(nullptr), "Present");

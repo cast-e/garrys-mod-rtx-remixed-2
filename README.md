@@ -229,6 +229,14 @@ rtx.native.forward.bakeBatch = 1024
 ```
 
 Positions override the eye directly; angles are Source pitch/yaw/roll in degrees.
+For a dense local irradiance reference, set `replay.probeBounds` to six finite
+Source coordinates: minimum XYZ followed by maximum XYZ. Each maximum must be
+greater than its minimum. The replay retains the complete geometry, occluders,
+surface charts and lights, but allocates the probe grid within this domain and
+keeps only reflection seeds inside it. Combine it with a smaller
+`rtx.native.forward.bakeSpacing` in an isolated configuration and cache directory.
+Lighting outside the local probe domain is not a valid comparison. This is a
+diagnostic reference, not automatic adaptive placement or a gameplay setting.
 Set `replay.mods = path/to/mods` to exercise the runtime's shared USD material
 replacements, including generated PBR packs. Relative paths resolve beside the
 settings file; the runtime must be built with USD support. The replay preserves

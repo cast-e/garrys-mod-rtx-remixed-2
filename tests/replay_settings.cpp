@@ -104,6 +104,15 @@ int main() {
   refuse("replay.lightStyleValue=-1");
   refuse("replay.lightStyleValue=nan");
   refuse("replay.lightStyleValue=5");
+  require(!parse("").probeBounds &&
+              parse("replay.probeBounds=-4 -3 -2 4 3 2").probeBounds ==
+                  std::optional<std::array<float, 6>>({-4, -3, -2, 4, 3, 2}),
+          "Local reference probe bounds are explicit and default off");
+  refuse("replay.probeBounds=0 0 0 0 1 1");
+  refuse("replay.probeBounds=0 0 0 1 -1 1");
+  refuse("replay.probeBounds=0 0 0 1 1 nan");
+  refuse("replay.probeBounds=0 0 0 1 1");
+  refuse("replay.probeBounds=0 0 0 1 1 1 extra");
   std::filesystem::remove(path);
   std::puts("Replay viewpoint parsing, Source camera basis and SDK delegation passed");
 }

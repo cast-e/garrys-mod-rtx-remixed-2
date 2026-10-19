@@ -7,6 +7,8 @@
 namespace proxy::replay {
 struct Settings {
   std::optional<std::array<float, 3>> position, angles;
+  // Reference bake of a local probe domain; geometry and lights remain complete.
+  std::optional<std::array<float, 6>> probeBounds;
   float fov = 65;
   uint32_t width = 640, height = 360;
   uint32_t measureFrames = 0, warmupFrames = 120;

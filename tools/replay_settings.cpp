@@ -50,6 +50,13 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
         settings.position = numbers<3>(value);
       else if (key == "replay.angles")
         settings.angles = numbers<3>(value);
+      else if (key == "replay.probeBounds") {
+        const auto bounds = numbers<6>(value);
+        for (size_t axis = 0; axis < 3; ++axis)
+          if (bounds[axis] >= bounds[axis + 3])
+            throw std::runtime_error("Probe bounds must have positive extent on every axis");
+        settings.probeBounds = bounds;
+      }
       else if (key == "replay.fov") {
         settings.fov = numbers<1>(value)[0];
         if (settings.fov < 1 || settings.fov >= 179)

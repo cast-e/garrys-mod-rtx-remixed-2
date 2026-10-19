@@ -3203,7 +3203,8 @@ bool active() { return g_active; }
 bool overlaysActive() { return g_active && !g_world.overlayGroups.empty(); }
 
 void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
-                      const std::vector<remixapi_BakeStyledLightEXT> &styled) {
+                      const std::vector<remixapi_BakeStyledLightEXT> &styled,
+                      const std::array<float, 6> *probeBounds) {
   static const auto publishCubemaps = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT");
   if (g_active) g_cubemapOverrides.poll(publishCubemaps);
   static const auto publish = sceneFunction<PFN_remixapi_SetBakeSceneEXT>("remixapi_SetBakeSceneEXT");
@@ -3232,6 +3233,8 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
     return;
   }
   uint64_t signature = XXH3_64bits(lights.data(), lights.size() * sizeof(lights[0]));
+  if (probeBounds)
+    signature = XXH3_64bits_withSeed(probeBounds->data(), sizeof(*probeBounds), signature);
   for (const auto &light : styled) {
     const uint64_t fields[] = {uint64_t(reinterpret_cast<uintptr_t>(light.authoredLight)),
                                uint64_t(reinterpret_cast<uintptr_t>(light.runtimeLight)), light.style};
@@ -3256,11 +3259,28 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
   reflections.reflectionRevision = 1;
   reflections.positionCount = uint32_t(g_world.reflectionSeeds.size());
   reflections.positions = g_world.reflectionSeeds.empty() ? nullptr : g_world.reflectionSeeds.front().data();
+  std::vector<std::array<float, 3>> localReflectionSeeds;
+  if (probeBounds) {
+    for (const auto &seed : g_world.reflectionSeeds) {
+      bool inside = true;
+      for (size_t axis = 0; axis < 3; ++axis)
+        inside &= seed[axis] >= (*probeBounds)[axis] && seed[axis] <= (*probeBounds)[axis + 3];
+      if (inside) localReflectionSeeds.push_back(seed);
+    }
+    reflections.positionCount = uint32_t(localReflectionSeeds.size());
+    reflections.positions = localReflectionSeeds.empty() ? nullptr : localReflectionSeeds.front().data();
+  }
   surfaces.chartRevision = g_world.submitVersion + 1;
   surfaces.chartCount = uint32_t(g_world.bakeCharts.size());
   surfaces.charts = g_world.bakeCharts.data();
   std::copy_n(g_world.playableMins, 3, bounds.minimum);
   std::copy_n(g_world.playableMaxs, 3, bounds.maximum);
+  // Diagnostic hosts can concentrate probe density in a reference domain.
+  // This never clips the captured surfaces, occluders or light list.
+  if (probeBounds) {
+    std::copy_n(probeBounds->begin(), 3, bounds.minimum);
+    std::copy_n(probeBounds->begin() + 3, 3, bounds.maximum);
+  }
   info.sceneId = XXH3_64bits(g_world.map.data(), g_world.map.size()) | 1;
   info.revision = g_world.submitVersion + 1;
   info.sceneScale = .0254f;
