@@ -223,6 +223,7 @@ $('undo').onclick=()=>{if(!history.length)return;future.push(copy(data));data=hi
 $('redo').onclick=()=>{if(!future.length)return;history.push(copy(data));data=future.pop();selected=Math.min(selected,data.volumes.length-1);changed(true);};
 $('frameMap').onclick=()=>frame(world.lines.flatMap(line=>[line.slice(0,3),line.slice(3)]));
 $('focus').onclick=()=>{const volume=data.volumes[selected];if(volume)frame([...corners(volume),volume.capture]);};
+$('goCapture').onclick=()=>{const volume=data.volumes[selected];if(volume)perspective.goToCapture(volume);};
 $('save').onclick=async()=>{
   if(saving) { saveRequested=true; return; }
   saving=true;

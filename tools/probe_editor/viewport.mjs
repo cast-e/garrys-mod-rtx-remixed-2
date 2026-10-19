@@ -1,12 +1,13 @@
 import {rotationAxes} from './rotation.mjs';
-import {add,sub,mul,dot,basis,project,ray,axisDistance,planePoint,resizeFace} from './perspective.mjs';
+import {add,sub,mul,dot,basis,project,ray,axisDistance,planePoint,resizeFace,framePosition} from './perspective.mjs';
+import {FlyControls} from './fly_controls.mjs';
 
 // Solid, depth-tested map geometry lives below an independent authoring overlay.
 export class Viewport {
   constructor(element,callbacks) {
     this.element=element; this.callbacks=callbacks;
     this.canvas=element.querySelector('.solid'); this.overlay=element.querySelector('.gizmos');
-    this.camera={position:[0,0,128],yaw:0,pitch:0}; this.speed=300; this.keys=new Set(); this.handles=[];
+    this.camera={position:[0,0,128],yaw:0,pitch:0}; this.speed=300; this.handles=[];
     const gl=this.canvas.getContext('webgl',{antialias:true});
     if(!gl)throw Error('The 3D editor requires WebGL');
     this.gl=gl;
@@ -42,29 +43,22 @@ export class Viewport {
     this.overlay.oncontextmenu=e=>e.preventDefault();
     this.overlay.onpointerdown=e=>this.down(e);
     this.overlay.onpointermove=e=>this.move(e);
-    const finish=()=>{
-      if(this.drag)this.callbacks.finish();this.drag=null;this.flying=false;this.keys.clear();
-      if(document.pointerLockElement===this.overlay)document.exitPointerLock();
-    };
-    this.overlay.onpointerup=e=>{finish();if(this.overlay.hasPointerCapture(e.pointerId))this.overlay.releasePointerCapture(e.pointerId);};
-    this.overlay.onpointercancel=finish;
-    this.overlay.onlostpointercapture=()=>{if(document.pointerLockElement!==this.overlay)finish();};
-    window.addEventListener('blur',finish);
-    document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement!==this.overlay)finish();});
-    window.addEventListener('keydown',e=>{
-      if(!this.flying)return;
-      if(['KeyW','KeyA','KeyS','KeyD','KeyQ','KeyE','ShiftLeft','ShiftRight'].includes(e.code)){
-        e.preventDefault();this.keys.add(e.code);
-      }
+    this.flight=new FlyControls(this.overlay,{window,document},()=>{
+      if(this.drag)this.callbacks.finish();this.drag=null;
     });
-    window.addEventListener('keyup',e=>this.keys.delete(e.code));
+    this.overlay.onpointerup=e=>{
+      this.flight.stop();
+      if(this.overlay.hasPointerCapture(e.pointerId))this.overlay.releasePointerCapture(e.pointerId);
+    };
+    this.overlay.onpointercancel=()=>this.flight.stop();
+    this.overlay.onlostpointercapture=()=>this.flight.lostCapture();
     this.overlay.onwheel=e=>{e.preventDefault();this.speed=Math.max(10,Math.min(10000,this.speed*Math.exp(-e.deltaY*.002)));this.draw();};
     new ResizeObserver(()=>this.draw()).observe(element);
     let previous;
     const tick=time=>{
       const dt=Math.min(.05,(time-(previous??time))/1000);previous=time;
-      if(this.flying&&this.keys.size){
-        const b=basis(this.camera.yaw,this.camera.pitch),k=code=>Number(this.keys.has(code));
+      if(this.flight.active&&this.flight.keys.size){
+        const b=basis(this.camera.yaw,this.camera.pitch),k=code=>Number(this.flight.keys.has(code));
         const motion=add(add(mul(b.forward,k('KeyW')-k('KeyS')),mul(b.right,k('KeyD')-k('KeyA'))),[0,0,k('KeyE')-k('KeyQ')]);
         const length=Math.hypot(...motion),boost=k('ShiftLeft')||k('ShiftRight')?3:1;
         if(length)this.camera.position=add(this.camera.position,mul(motion,dt*this.speed*boost/length));
@@ -79,20 +73,18 @@ export class Viewport {
   }
   frame(points) {
     if(!points.length)return;
-    const lo=[Infinity,Infinity,Infinity],hi=[-Infinity,-Infinity,-Infinity];
-    for(const p of points)for(let i=0;i<3;i++){lo[i]=Math.min(lo[i],p[i]);hi[i]=Math.max(hi[i],p[i]);}
-    const center=mul(add(lo,hi),.5),radius=Math.max(64,Math.hypot(...sub(hi,lo))*.5);
     this.camera.yaw=Math.PI/4;this.camera.pitch=-.3;
-    this.camera.position=sub(center,mul(basis(this.camera.yaw,this.camera.pitch).forward,radius*2.3));this.draw();
+    this.camera.position=framePosition(points,this.camera,this.overlay.clientWidth,this.overlay.clientHeight);this.draw();
+  }
+  goToCapture(volume) {
+    this.camera.position=[...volume.capture];
+    this.draw();
   }
   position(e){const r=this.overlay.getBoundingClientRect();return[e.clientX-r.left,e.clientY-r.top];}
   mouseRay(mouse){return ray(mouse,this.camera,this.overlay.clientWidth,this.overlay.clientHeight);}
   down(e) {
     if(e.button===2){
-      e.preventDefault();this.flying=true;this.overlay.setPointerCapture(e.pointerId);
-      // Pointer lock removes screen-edge limits; captured dragging still works if
-      // the browser declines it (for example inside a restricted embed).
-      const lock=this.overlay.requestPointerLock?.();lock?.catch(()=>{});return;
+      e.preventDefault();this.flight.start(e.pointerId);return;
     }
     if(e.button!==0)return;
     const mouse=this.position(e),hits=this.handles.filter(h=>Math.hypot(mouse[0]-h.p[0],mouse[1]-h.p[1])<12);
@@ -109,7 +101,7 @@ export class Viewport {
     this.overlay.setPointerCapture(e.pointerId);
   }
   move(e) {
-    if(this.flying){this.camera.yaw-=e.movementX*.003;this.camera.pitch=Math.max(-1.55,Math.min(1.55,this.camera.pitch-e.movementY*.003));this.draw();return;}
+    if(this.flight.active){this.camera.yaw-=e.movementX*.003;this.camera.pitch=Math.max(-1.55,Math.min(1.55,this.camera.pitch-e.movementY*.003));this.draw();return;}
     if(!this.drag)return;
     const d=this.drag,volume=this.callbacks.state().data.volumes[d.index],r=this.mouseRay(this.position(e));
     if(d.kind==='face'){

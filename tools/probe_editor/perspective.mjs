@@ -7,6 +7,22 @@ export function basis(yaw,pitch) {
   const c=Math.cos(yaw),s=Math.sin(yaw),p=Math.cos(pitch),q=Math.sin(pitch);
   return {forward:[c*p,s*p,q],right:[s,-c,0],up:[-c*q,-s*q,p]};
 }
+export function framePosition(points, camera, width, height) {
+  if (!points.length) return camera.position;
+  const low = [Infinity, Infinity, Infinity], high = [-Infinity, -Infinity, -Infinity];
+  for (const point of points) for (let axis = 0; axis < 3; axis++) {
+    low[axis] = Math.min(low[axis], point[axis]);
+    high[axis] = Math.max(high[axis], point[axis]);
+  }
+  const center = mul(add(low, high), .5);
+  const radius = Math.max(64, Math.hypot(...sub(high, low)) * .5);
+  const verticalHalfAngle = Math.PI / 6;
+  const aspect = Math.max(.001, width / Math.max(1, height));
+  const horizontalHalfAngle = Math.atan(Math.tan(verticalHalfAngle) * aspect);
+  // Fit a bounding sphere to the narrower field of view with a small margin.
+  const distance = radius * 1.1 / Math.sin(Math.min(verticalHalfAngle, horizontalHalfAngle));
+  return sub(center, mul(basis(camera.yaw, camera.pitch).forward, distance));
+}
 export function project(point,camera,width,height) {
   const b=basis(camera.yaw,camera.pitch),d=sub(point,camera.position),z=dot(d,b.forward);
   if(z<=1)return null;

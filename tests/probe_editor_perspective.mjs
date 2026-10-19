@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {rotationAxes} from '../tools/probe_editor/rotation.mjs';
-import {add,sub,mul,dot,basis,project,ray,axisDistance,planePoint,resizeFace} from '../tools/probe_editor/perspective.mjs';
+import {add,sub,mul,dot,basis,project,ray,axisDistance,planePoint,resizeFace,framePosition} from '../tools/probe_editor/perspective.mjs';
 const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-7,`${a} != ${b}`);
 let cases=0;
 for(const yaw of [0,.7,-2])for(const pitch of [-1,0,1]){
@@ -30,4 +30,13 @@ for(const target of [[100,0,0],[100,30,0],[100,-50,0]]){
   close(axisDistance(r,[100,0,0],[0,1,0]),target[1]);cases++;
 }
 assert.equal(axisDistance({origin:[0,0,0],direction:[1,0,0]},[0,0,0],[1,0,0]),null);
+const corners=Array.from({length:8},(_,i)=>[i&1?100:-100,i&2?300:-300,i&4?200:-200]);
+for(const [width,height] of [[320,1000],[1600,600],[800,800]]) {
+  const framed={yaw:.7,pitch:-.3};framed.position=framePosition(corners,framed,width,height);
+  for(const point of corners){
+    const pixel=project(point,framed,width,height);
+    assert.ok(pixel&&pixel[0]>0&&pixel[0]<width&&pixel[1]>0&&pixel[1]<height);
+    cases++;
+  }
+}
 console.log(`${cases} perspective, ray picking and fixed opposite-face checks passed`);

@@ -50,12 +50,13 @@ def main():
 
         def do_GET(self):
             route = urlparse(self.path).path
-            if route in ('/', '/editor.js', '/editor.css', '/rotation.mjs', '/perspective.mjs', '/viewport.mjs'):
+            if route in ('/', '/editor.js', '/editor.css', '/rotation.mjs', '/perspective.mjs', '/viewport.mjs', '/fly_controls.mjs'):
                 name, mime = {'/': ('index.html', 'text/html'), '/editor.js': ('editor.js', 'text/javascript'),
                               '/editor.css': ('editor.css', 'text/css'),
                               '/rotation.mjs': ('rotation.mjs', 'text/javascript'),
                               '/perspective.mjs': ('perspective.mjs', 'text/javascript'),
-                              '/viewport.mjs': ('viewport.mjs', 'text/javascript')}[route]
+                              '/viewport.mjs': ('viewport.mjs', 'text/javascript'),
+                              '/fly_controls.mjs': ('fly_controls.mjs', 'text/javascript')}[route]
                 self.respond(200, (assets / name).read_bytes(), mime)
             elif self.headers.get('X-Editor-Token') != token:
                 self.respond(403, {'error': 'Invalid editor session'})

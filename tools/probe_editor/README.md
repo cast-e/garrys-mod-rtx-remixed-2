@@ -8,13 +8,16 @@ python -m probe_editor "D:/maps/example.bsp" --output "D:/bounds/example.cubemap
 
 The local browser workbench opens a primary 3D view with depth-tested, shaded world geometry.
 Hold right mouse and use WASD to fly, Q/E to descend/ascend, and Shift to move faster.
-The wheel adjusts flight speed. Mouse look uses pointer lock where the browser permits it.
+The wheel adjusts flight speed. Escape exits mouse look. Pointer lock is used where the browser
+permits it; captured dragging remains available if it is declined.
 Add cubemap creates a volume at the camera. Select volumes in the list or click their blue points.
 Drag yellow face handles to resize along a rotated local axis while keeping the opposite face fixed.
 Drag the green center square to move bounds (Alt-drag when the capture point overlaps), or drag
 its blue capture point independently. Handles remain visible through walls. Numeric fields expose
 rotation, transforms and priority. Optional orthographic precision views retain rotation rings,
-middle/right drag panning and wheel zoom. Frame selected focuses the current volume.
+middle/right drag panning and wheel zoom. Frame selected fits the current volume to the viewport,
+including narrow windows. Go to capture places the camera at the selected reflection origin without
+changing the volume or the viewing direction.
 Undo/redo, JSON import/export and Ctrl+S are available. Save atomically writes the explicit output
 file; reopening the same command loads it. A BSP SHA-256 fingerprint prevents using an authoring
 document against a different map revision. Close the server with Ctrl+C when finished.
@@ -66,4 +69,5 @@ Checks, from the repository root:
 python tests/probe_editor.py
 node tests/probe_editor_rotation.mjs
 node tests/probe_editor_perspective.mjs
+node tests/probe_editor_flight.mjs
 ```
