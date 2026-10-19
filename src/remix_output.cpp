@@ -4512,7 +4512,6 @@ void onPresent() {
     g_frameBegan.store(now.QuadPart, std::memory_order_relaxed);
     g_frameThread.store(GetCurrentThreadId(), std::memory_order_relaxed);
   }
-  frame_profile::sample(g_frameIntervalMs);
   Timer timer(g_usSubmit, &g_totalUs[2]);
   // Classify this frame's perspective views. The main view is the one with the
   // most draws among those sharing the most common field of view. Views with
@@ -5287,10 +5286,17 @@ void onPresent() {
   }
   sendSceneFog();
   hostpass::submit(g_dumpFlat);
+  remixapi_ErrorCode presentResult;
   {
     Timer present(g_usPresent, &g_totalUs[4]);
-    g_api.Present(nullptr);
+    presentResult = g_api.Present(nullptr);
   }
+  static auto previousPresentResult = REMIXAPI_ERROR_CODE_SUCCESS;
+  if (presentResult != previousPresentResult) {
+    diag::stage("OpenRemix Present returned %u (previous %u)", unsigned(presentResult), unsigned(previousPresentResult));
+    previousPresentResult = presentResult;
+  }
+  frame_profile::sample(g_frameIntervalMs, presentResult);
   if (mark)
     diag::stage("frame %u: presented", presents);
   logWindowState(presents);

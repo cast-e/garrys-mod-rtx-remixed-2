@@ -82,6 +82,15 @@ d3d_method_test = executable('d3d-method-test', 'tests/d3d_method.cpp',
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('D3D9 resource methods across distinct vtables', d3d_method_test)
 
+diagnostic_module = shared_library('diagnostic-module-fixture', 'tests/diagnostic_module.cpp',
+  include_directories: include_directories('src'),
+  link_args: ['-static-libgcc', '-static-libstdc++'])
+diagnostic_workers_test = executable('diagnostic-workers-test', 'tests/diagnostic_workers.cpp',
+  include_directories: include_directories('src'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Diagnostic workers stop before shutdown and retain hook code across host release',
+  diagnostic_workers_test, args: [diagnostic_module.full_path()], depends: diagnostic_module, timeout: 15)
+
 bake_sky_test = executable('bake-sky-test', 'tests/bake_sky.cpp', 'src/bake_sky.cpp', 'src/bake_sky_cache.cpp',
   include_directories: include_directories('src', remix_inc, 'deps/xxhash'),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])

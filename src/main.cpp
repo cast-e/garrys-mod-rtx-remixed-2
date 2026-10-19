@@ -2,6 +2,7 @@
 // shaderapidx9_orig.dll and hands out forwarding wrappers for its interfaces.
 // Phase 1: pure pass-through with per-slot call statistics.
 #include "diag.h"
+#include "diagnostic_workers.h"
 #include "d3d_hooks.h"
 #include "engine_lights.h"
 #include "engine_materials.h"
@@ -12,6 +13,7 @@
 #include "vtable_proxy.h"
 
 #include <algorithm>
+#include <atomic>
 #include <tlhelp32.h>
 
 #include <cctype>
@@ -35,6 +37,7 @@ HMODULE g_orig = nullptr;
 CreateInterfaceFn g_origCreateInterface = nullptr;
 FILE *g_log = nullptr;
 std::wstring g_dir;
+proxy::diag::Workers g_workers;
 
 void log(const char *fmt, ...) {
   if (!g_log)
@@ -120,6 +123,10 @@ bool loadOriginal() {
   g_dir.resize(g_dir.find_last_of(L"\\/"));
   g_log = _wfopen((g_dir + L"\\shaderapi_proxy.log").c_str(), L"w");
   proxy::diag::reinstall();
+  if (!proxy::diag::retainHookModule(g_self)) {
+    proxy::diag::stage("Failed to retain proxy hook module (error %lu)", GetLastError());
+    return false;
+  }
   proxy::diag::captureEngineErrors();
   proxy::diag::stage("first CreateInterface: loading shaderapidx9_orig.dll");
   forceNoD3D9Ex();
@@ -165,7 +172,18 @@ bool deviceMgrConnect(proxy::Wrapper *self, CreateInterfaceFn factory) {
   g_connectFactory = factory;
   log("proxy: IShaderDeviceMgr::Connect(factory %p)", reinterpret_cast<void *>(factory));
   proxy::diag::stage("IShaderDeviceMgr::Connect");
-  return proxy::original<Fn>(self, 0)(self->real, factory ? connectFactory : nullptr);
+  const bool connected = proxy::original<Fn>(self, 0)(self->real, factory ? connectFactory : nullptr);
+  proxy::diag::stage("IShaderDeviceMgr::Connect returned %u", unsigned(connected));
+  return connected;
+}
+
+// IAppSystem slot 3 returns InitReturnVal_t (0 failed, 1 initialized).
+int deviceMgrInit(proxy::Wrapper *self) {
+  using Fn = int (*)(void *);
+  proxy::diag::stage("IShaderDeviceMgr::Init");
+  const int result = proxy::original<Fn>(self, 3)(self->real);
+  proxy::diag::stage("IShaderDeviceMgr::Init returned %d", result);
+  return result;
 }
 
 // IShaderDeviceMgr slot 4: void Shutdown() (IAppSystem). The material system
@@ -175,6 +193,8 @@ void deviceMgrShutdown(proxy::Wrapper *self) {
   using Fn = void (*)(void *);
   log("proxy: IShaderDeviceMgr::Shutdown");
   proxy::diag::stage("IShaderDeviceMgr::Shutdown (the game is quitting)");
+  g_workers.stop();
+  proxy::diag::stage("Diagnostic workers joined before engine shutdown");
   proxy::original<Fn>(self, 4)(self->real);
   proxy::remix::shutdown();
 }
@@ -252,6 +272,7 @@ const KnownInterface kKnown[] = {
      [](proxy::Kind *k) {
        proxy::setHook(k, 0, reinterpret_cast<void *>(&deviceMgrConnect));
        proxy::setHook(k, 2, reinterpret_cast<void *>(&deviceMgrQueryInterface));
+       proxy::setHook(k, 3, reinterpret_cast<void *>(&deviceMgrInit));
        proxy::setHook(k, 4, reinterpret_cast<void *>(&deviceMgrShutdown));
        proxy::setHook(k, 12, reinterpret_cast<void *>(&deviceMgrSetMode));
      }},
@@ -357,7 +378,7 @@ void sampleThreads() {
         threads.emplace_back(entry.th32ThreadID, thread);
   CloseHandle(snapshot);
   const ULONGLONG end = GetTickCount64() + 5000;
-  while (GetTickCount64() < end) {
+  while (GetTickCount64() < end && !g_workers.stopping()) {
     for (auto [id, thread] : threads) {
       CONTEXT context = {};
       context.ContextFlags = CONTEXT_CONTROL;
@@ -415,8 +436,7 @@ BOOL CALLBACK closeWindow(HWND window, LPARAM) {
 DWORD WINAPI profilerThread(void *) {
   const std::wstring request = g_dir + L"\\shaderapi_proxy_profile.request";
   const std::wstring close = g_dir + L"\\shaderapi_proxy_close.request";
-  for (;;) {
-    Sleep(250);
+  while (!g_workers.wait(250)) {
     if (GetFileAttributesW(close.c_str()) != INVALID_FILE_ATTRIBUTES) {
       DeleteFileW(close.c_str());
       EnumWindows(closeWindow, 0);
@@ -426,6 +446,7 @@ DWORD WINAPI profilerThread(void *) {
     DeleteFileW(request.c_str());
     sampleThreads();
   }
+  return 0;
 }
 
 // The engine asks every loose search path for a file before its packages
@@ -447,7 +468,7 @@ struct FileOpens {
 };
 std::mutex g_openLock;
 std::map<std::string, FileOpens> g_opens;
-bool g_noteOpens = false;
+std::atomic_bool g_noteOpens{false};
 using CreateFileAFn = HANDLE(WINAPI *)(LPCSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
 using CreateFileWFn = HANDLE(WINAPI *)(LPCWSTR, DWORD, DWORD, LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
 CreateFileAFn g_createFileA = nullptr;
@@ -597,8 +618,7 @@ DWORD WINAPI stallThread(void *parameter) {
   unsigned samples = 0;
   g_noteOpens = true;
 
-  for (;;) {
-    Sleep(1);
+  while (!g_workers.wait(1)) {
     unsigned long id = 0;
     double ms = 0;
     if (proxy::remix::frameInProgress(id, ms) && ms > limit && ms < 1000) {
@@ -660,12 +680,14 @@ DWORD WINAPI stallThread(void *parameter) {
       }
     }
   }
+  if (thread) CloseHandle(thread);
+  g_noteOpens = false;
+  return 0;
 }
 
 // Per-slot call counts to shaderapi_proxy_slots.txt every 10 s.
 DWORD WINAPI statisticsThread(void *) {
-  for (int tick = 0;; ++tick) {
-    Sleep(10000);
+  for (int tick = 0; !g_workers.wait(10000); ++tick) {
     if (tick == 3)
       scanForRealPointers();
     FILE *f = _wfopen((g_dir + L"\\shaderapi_proxy_slots.txt").c_str(), L"w");
@@ -682,6 +704,7 @@ DWORD WINAPI statisticsThread(void *) {
       proxy::remix::noteStatisticsDump(false);
     }
   }
+  return 0;
 }
 
 } // namespace
@@ -699,12 +722,12 @@ extern "C" __declspec(dllexport) void *CreateInterface(const char *name, int *re
   if (!threadsStarted) {
     threadsStarted = true;
     hookFileOpens();
-    CloseHandle(CreateThread(nullptr, 0, statisticsThread, nullptr, 0, nullptr));
-    CloseHandle(CreateThread(nullptr, 0, profilerThread, nullptr, 0, nullptr));
+    if (!g_workers.start(statisticsThread) || !g_workers.start(profilerThread))
+      log("proxy: diagnostic worker creation failed (%lu)", GetLastError());
     char stalls[16] = {};
     if (GetEnvironmentVariableA("OPENREMIX_PROXY_STALLS", stalls, sizeof(stalls)) && std::atoi(stalls) > 0)
-      CloseHandle(CreateThread(nullptr, 0, stallThread, reinterpret_cast<void *>(uintptr_t(std::atoi(stalls))), 0,
-                               nullptr));
+      if (!g_workers.start(stallThread, reinterpret_cast<void *>(uintptr_t(std::atoi(stalls)))))
+        log("proxy: stall sampler creation failed (%lu)", GetLastError());
   }
   return wrapInterface(name, g_origCreateInterface(name, returnCode));
 }

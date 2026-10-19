@@ -44,15 +44,17 @@ struct Recorder {
     gpu = reinterpret_cast<PFN_remixapi_GetGpuPassTimingsEXT>(GetProcAddress(module, "remixapi_GetGpuPassTimingsEXT"));
     cpu = reinterpret_cast<PFN_remixapi_GetFramePerformanceEXT>(GetProcAddress(module, "remixapi_GetFramePerformanceEXT"));
     bake = reinterpret_cast<PFN_remixapi_GetBakeStatisticsEXT>(GetProcAddress(module, "remixapi_GetBakeStatisticsEXT"));
-    std::fputs("unixMs,hostMs,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
-               "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,bakeState,bakeHash\n", file.get());
+    std::fputs("unixMs,hostMs,presentStatus,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
+               "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,"
+               "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash\n", file.get());
   }
 
-  void sample(double hostMs) {
+  void sample(double hostMs, remixapi_ErrorCode presentStatus) {
     if (!file) return;
     remixapi_GpuPassTimingsEXT timings{};
     timings.structSize = sizeof(timings);
-    const bool available = gpu && gpu(&timings) == REMIXAPI_ERROR_CODE_SUCCESS && timings.available;
+    const bool available = presentStatus == REMIXAPI_ERROR_CODE_SUCCESS && gpu &&
+                           gpu(&timings) == REMIXAPI_ERROR_CODE_SUCCESS && timings.available;
     remixapi_FramePerformanceEXT frame{};
     frame.structSize = sizeof(frame);
     if (cpu) cpu(&frame);
@@ -70,13 +72,16 @@ struct Recorder {
     const uint64_t ticks = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
     const auto unixMs = (ticks - 116444736000000000ull) / 10000;
     const bool fresh = available && timings.frame != lastGpu;
-    std::fprintf(file.get(), "%llu,%.6f,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%u,%llu\n",
-        static_cast<unsigned long long>(unixMs), hostMs, frame.recordMilliseconds, frame.fenceMilliseconds,
+    std::fprintf(file.get(), "%llu,%.6f,%u,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,"
+        "%.6f,%.6f,%.6f,%.6f,%u,%llu\n",
+        static_cast<unsigned long long>(unixMs), hostMs, unsigned(presentStatus), frame.recordMilliseconds, frame.fenceMilliseconds,
         unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
         timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
         pass("Forward+ opaque world shading"), pass("Forward+ light clustering"),
         pass("Forward+ local shadow maps"), pass("Forward+ sun shadow cascades"),
-        pass("Forward+ reflection resolve and composition"), lighting.state,
+        pass("Forward+ reflection resolve and composition"), pass("Forward+ opaque depth prepass"),
+        pass("Forward+ lit viewmodel overlay"), pass("Forward+ viewmodel sun shadow"),
+        pass("Forward+ viewmodel local self shadows"), lighting.state,
         static_cast<unsigned long long>(lighting.activeHash));
     if (available) lastGpu = timings.frame;
     if (++rows % 120 == 0) std::fflush(file.get());
@@ -84,8 +89,8 @@ struct Recorder {
 };
 }
 
-void sample(double hostFrameMilliseconds) {
+void sample(double hostFrameMilliseconds, remixapi_ErrorCode presentStatus) {
   static Recorder recorder;
-  recorder.sample(hostFrameMilliseconds);
+  recorder.sample(hostFrameMilliseconds, presentStatus);
 }
 }
