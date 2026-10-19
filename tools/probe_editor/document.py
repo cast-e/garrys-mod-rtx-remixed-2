@@ -64,6 +64,36 @@ def new_volume(position):
                 halfSize=[128, 128, 128], rotationDegrees=[0, 0, 0], capture=list(position))
 
 
+def projection_transform(probe, lo, hi):
+    """Convert a native rigid projection frame to the editor's Rz*Ry*Rx box."""
+    rows = probe.get('worldToLocal', [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]])
+    if not isinstance(rows, list) or len(rows) != 3 or any(
+            not isinstance(row, list) or len(row) != 4 for row in rows):
+        raise ValueError('Invalid projection frame')
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+           for row in rows for v in row):
+        raise ValueError('Invalid projection frame')
+    for a in range(3):
+        for b in range(3):
+            if abs(sum(rows[a][c]*rows[b][c] for c in range(3)) - (a == b)) > 1e-4:
+                raise ValueError('Projection frame must be rigid')
+    rotation = [[rows[c][r] for c in range(3)] for r in range(3)]
+    determinant = sum(rotation[0][c] * (rotation[1][(c+1)%3]*rotation[2][(c+2)%3] -
+                       rotation[1][(c+2)%3]*rotation[2][(c+1)%3]) for c in range(3))
+    if determinant < .999:
+        raise ValueError('Projection frame must preserve orientation')
+    local = [(a+b)/2 - rows[c][3] for c,(a,b) in enumerate(zip(lo,hi))]
+    center = [sum(rotation[r][c]*local[c] for c in range(3)) for r in range(3)]
+    pitch = math.asin(max(-1, min(1, -rotation[2][0])))
+    if abs(math.cos(pitch)) > 1e-6:
+        roll = math.atan2(rotation[2][1], rotation[2][2])
+        yaw = math.atan2(rotation[1][0], rotation[0][0])
+    else:
+        roll = 0
+        yaw = math.atan2(-rotation[0][1], rotation[1][1])
+    return center, [math.degrees(v) for v in (roll, pitch, yaw)]
+
+
 def from_probe_report(payload, map_name, map_hash):
     """Import an explicitly selected native report; it has no BSP fingerprint.
 
@@ -89,8 +119,9 @@ def from_probe_report(payload, map_name, map_hash):
         lo, hi = vector(probe.get('minimum'), 'minimum'), vector(probe.get('maximum'), 'maximum')
         if any(a >= b for a, b in zip(lo, hi)):
             raise ValueError('Invalid projection bounds in probe report')
-        volume = dict(id=f'auto-{index}-{report["activeHash"]}', name=f'Automatic {index}', priority=0,
-                      center=[(a+b)/2 for a,b in zip(lo,hi)], halfSize=[(b-a)/2 for a,b in zip(lo,hi)],
-                      rotationDegrees=[0, 0, 0], capture=vector(probe.get('position'), 'position'))
+        center, rotation = projection_transform(probe, lo, hi)
+        volume = dict(id=f'auto-{index}-{report["activeHash"]}', name=f'Automatic {index}',
+                      priority=probe.get('priority', 0), center=center, halfSize=[(b-a)/2 for a,b in zip(lo,hi)],
+                      rotationDegrees=rotation, capture=vector(probe.get('position'), 'position'))
         result['volumes'].append(volume)
     return validate(result, map_hash)

@@ -27,8 +27,9 @@ box. Rotation applies X then Y then Z (`Rz * Ry * Rx`); `capture` is independent
 
 This first version displays world-brush edges and displacement base polygons. It does not display
 props, displaced terrain tessellation or materials. It does not yet show a shaded cubemap preview
-or apply the file in game. Renderer import, rotated projection bounds,
-priority selection and reflection-only hot reload remain the next integration work. Do not treat
+or apply the file in game. The native sampler supports rotated projection bounds and overlap priorities;
+importing native reports preserves those transforms and independent capture points. Applying saved documents
+through the adapter and reflection-only hot reload remain the next integration work. Do not treat
 saved documents as already-active game overrides.
 
 Checks, from the repository root:

@@ -54,6 +54,22 @@ class AuthoringData(unittest.TestCase):
         self.assertEqual(document.validate(first, 'abc')['reference'], first['reference'])
         self.assertEqual(volume['capture'][0], 256)
 
+    def test_native_oriented_report_preserves_projection_and_priority(self):
+        frame = [[0, 1, 0, -20], [-1, 0, 0, 10], [0, 0, 1, -30]]
+        probe = dict(position=[10, 20.25, 30], minimum=[-2, -.5, -1], maximum=[2, .5, 1],
+                     worldToLocal=frame, priority=-12)
+        def payload():
+            return json.dumps(dict(version=1, activeHash='42', metersPerUnit=.0254, probes=[probe])).encode()
+        volume = document.from_probe_report(payload(), 'test', 'abc')['volumes'][0]
+        self.assertEqual(volume['center'], [10, 20, 30])
+        self.assertEqual(volume['halfSize'], [2, .5, 1])
+        self.assertEqual(volume['capture'], [10, 20.25, 30])
+        self.assertEqual(volume['rotationDegrees'], [0, 0, 90])
+        self.assertEqual(volume['priority'], -12)
+        frame[0][1] = 2
+        with self.assertRaises(ValueError):
+            document.from_probe_report(payload(), 'test', 'abc')
+
     def test_native_report_refuses_unpublished_and_invalid_bounds(self):
         for active, lo, hi in [('0', [0, 0, 0], [1, 1, 1]),
                               ('10', [0, 0, 0], [-1, 1, 1])]:
