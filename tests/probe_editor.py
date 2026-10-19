@@ -127,6 +127,10 @@ class AuthoringData(unittest.TestCase):
             path.write_bytes(contents)
             result = geometry.load(path)
             self.assertEqual(len(result['lines']), 3)
+            self.assertEqual(len(result['mesh']), 18)
+            self.assertEqual(result['mesh'][0:6], [0, 0, 0, 0, 0, 1])
+            self.assertEqual(result['mesh'][6:9], [128, 0, 0])
+            self.assertEqual(result['mesh'][12:15], [0, 128, 0])
             self.assertTrue(all(max(edge) <= 128 for edge in result['lines']))
             # A valid lump with a bad edge reference must fail before displaying it.
             struct.pack_into('<i', contents, struct.unpack_from('<i', contents, 8+13*16)[0], 100)

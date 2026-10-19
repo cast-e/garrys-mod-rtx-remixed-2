@@ -1,4 +1,5 @@
 import {rotationAxes, rotateWorld} from './rotation.mjs';
+import {Viewport} from './viewport.mjs';
 const $ = id => document.getElementById(id);
 const token = location.hash.slice(1);
 const headers = {'X-Editor-Token': token, 'Content-Type': 'application/json'};
@@ -12,6 +13,10 @@ const copy = value => structuredClone(value);
 let world, data, selected = -1, dirty = false, history = [], future = [];
 let saveTimer, saving = false, saveRequested = false, editVersion = 0;
 const views = [];
+const perspective = new Viewport($('perspective'), {
+  state:()=>({world,data,selected,reference:$('showReference').checked}),
+  select,checkpoint,changed,finish:properties
+});
 const add = (a,b) => a.map((v,i) => v+b[i]);
 const sub = (a,b) => a.map((v,i) => v-b[i]);
 const mul = (a,s) => a.map(v => v*s);
@@ -71,8 +76,9 @@ function properties() {
   }
 }
 function select(index) { selected=index; list(); properties(); draw(); }
-function frame(points) {
+function frame(points, includePerspective=true) {
   if(!points.length)return;
+  if(includePerspective)perspective.frame(points);
   for(const view of views) {
     const [a,b]=view.axes;
     let low=[Infinity,Infinity], high=[-Infinity,-Infinity];
@@ -99,6 +105,7 @@ function mark(ctx,point,radius,color,square=false) {
 }
 function draw() {
   if(!world||!data)return;
+  perspective.draw();
   for(const view of views) {
     const {canvas}=view, ctx=canvas.getContext('2d'), ratio=devicePixelRatio||1;
     const width=canvas.clientWidth,height=canvas.clientHeight;
@@ -147,7 +154,7 @@ function draw() {
     ctx.fillStyle='#8aa5b4';ctx.fillText(`${(100/view.scale).toFixed(1)} units / 100 px`,12,height-12);
   }
 }
-for(const canvas of document.querySelectorAll('canvas')) {
+for(const canvas of document.querySelectorAll('canvas[data-axes]')) {
   const view={canvas,axes:canvas.dataset.axes.split(',').map(Number),center:[0,0],scale:1,handles:[]};views.push(view);
   const position=event=>{const rect=canvas.getBoundingClientRect();return[event.clientX-rect.left,event.clientY-rect.top];};
   let drag;
@@ -200,8 +207,13 @@ for(const canvas of document.querySelectorAll('canvas')) {
 }
 $('volumes').onchange=()=>select($('volumes').selectedIndex);
 $('showReference').onchange=draw;
+$('precision').ontoggle=()=>{
+  if(!$('precision').open||!world)return;
+  const volume=data.volumes[selected];
+  frame(volume?[...corners(volume),volume.capture]:world.lines.flatMap(edge=>[edge.slice(0,3),edge.slice(3)]),false);
+};
 $('add').onclick=()=>{
-  checkpoint();const center=data.volumes[selected]?.center || [views[0].center[0],views[0].center[1],views[1].center[1]];
+  checkpoint();const center=[...perspective.camera.position];
   data.volumes.push({id:crypto.randomUUID(),name:`Cubemap ${data.volumes.length+1}`,priority:0,
     center:[...center],halfSize:[128,128,128],rotationDegrees:[0,0,0],capture:[...center]});
   selected=data.volumes.length-1;changed(true);
@@ -245,6 +257,7 @@ window.onbeforeunload=event=>{if(dirty){event.preventDefault();event.returnValue
 window.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='s'){event.preventDefault();$('save').click();}});
 try {
   [world,data]=await Promise.all([request('/scene'),request('/document')]);
+  perspective.setScene(world);
   $('live').checked=!!world.runtimeLive;
   $('mapName').textContent=world.name;$('note').textContent=world.note;
   $('referenceControl').hidden=!world.referenceVolumes;

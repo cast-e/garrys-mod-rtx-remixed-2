@@ -6,10 +6,15 @@ Run from `tools` with Python 3.10 or newer; no extra packages are required:
 python -m probe_editor "D:/maps/example.bsp" --output "D:/bounds/example.cubemaps.json"
 ```
 
-The local browser workbench reads a Source BSP and opens top, front and side wireframe views.
-Add/select volumes, drag their faces, move/rotate bounds, and move capture points independently.
-Use Alt-drag on the center when the capture point overlaps it. Numeric fields expose every transform
-and priority. Middle/right drag pans, wheel zooms, and Frame selected focuses the current volume.
+The local browser workbench opens a primary 3D view with depth-tested, shaded world geometry.
+Hold right mouse and use WASD to fly, Q/E to descend/ascend, and Shift to move faster.
+The wheel adjusts flight speed. Mouse look uses pointer lock where the browser permits it.
+Add cubemap creates a volume at the camera. Select volumes in the list or click their blue points.
+Drag yellow face handles to resize along a rotated local axis while keeping the opposite face fixed.
+Drag the green center square to move bounds (Alt-drag when the capture point overlaps), or drag
+its blue capture point independently. Handles remain visible through walls. Numeric fields expose
+rotation, transforms and priority. Optional orthographic precision views retain rotation rings,
+middle/right drag panning and wheel zoom. Frame selected focuses the current volume.
 Undo/redo, JSON import/export and Ctrl+S are available. Save atomically writes the explicit output
 file; reopening the same command loads it. A BSP SHA-256 fingerprint prevents using an authoring
 document against a different map revision. Close the server with Ctrl+C when finished.
@@ -25,8 +30,9 @@ Coordinates use BSP units. `center`, positive `halfSize`, and `rotationDegrees` 
 box. Rotation applies X then Y then Z (`Rz * Ry * Rx`); `capture` is independent in world space.
 `id` is stable across edits. Larger integer `priority` is intended to win overlapping regions.
 
-The workbench displays world-brush edges and displacement base polygons. Props, displaced terrain
-and materials are not displayed, and there is no shaded preview inside the browser.
+The workbench displays world-brush surfaces and displacement base polygons, excluding sky and nodraw
+faces. Props, displaced terrain and materials are not displayed. Shading is a geometry aid rather than
+a preview of the game lighting or reflections. The 3D view requires WebGL.
 
 For the configured testing install, launch from the repository root:
 
@@ -59,4 +65,5 @@ Checks, from the repository root:
 ```powershell
 python tests/probe_editor.py
 node tests/probe_editor_rotation.mjs
+node tests/probe_editor_perspective.mjs
 ```
