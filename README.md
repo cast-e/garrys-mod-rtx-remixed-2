@@ -174,8 +174,12 @@ engine's sky rendering are absent. Animated textures remain unresolved. Missing
 assets and incomplete static props keep baking pending; direct lighting can
 still render. A successful screenshot alone does not establish that baking
 finished: check the logged bake state (`3`, active `1`). Increase the frame
-budget when a map is still baking. Source face fans that fold in lightmap space
-retain their geometry and use probes instead of a surface chart.
+budget when a map is still baking. Rounded, nearly collinear BSP fan slivers can
+have reversed lightmap winding. The importer preserves valid contiguous triangle
+ranges as surface charts and leaves only those tiny slivers on probes, without
+changing render or shadow geometry. The repair permits at most 0.0001 luxel of UV
+altitude; substantial folds and invalid mappings retain whole-face probe fallback.
+Native overlap validation remains unchanged.
 
 
 Static props preserve both alpha testing and ordinary alpha blending. An

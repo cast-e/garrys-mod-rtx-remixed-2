@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace proxy::bsp::lightmaps {
@@ -29,15 +30,21 @@ struct Mapping {
 };
 // Input coordinates belong to the original flat face/grid. Displacement
 // offsets and material UVs must never change the chart mapping.
+// indexEnd is exclusive; zero captures the remaining indices of an ordinary face.
 inline std::optional<Chart> capture(const Mapping &mapping, uint32_t firstIndex,
                                     const std::vector<uint32_t> &indices, uint32_t vertexBase,
-                                    const std::vector<std::array<float, 2>> &coordinates) {
+                                    const std::vector<std::array<float, 2>> &coordinates,
+                                    size_t indexEnd = 0) {
+  if (!indexEnd)
+    indexEnd = indices.size();
+  if (indexEnd > indices.size() || indexEnd <= firstIndex || indexEnd % 3)
+    return {};
   if (mapping.size[0] < 1 || mapping.size[1] < 1 || mapping.size[0] >= 4096 || mapping.size[1] >= 4096 ||
-      firstIndex >= indices.size() || firstIndex % 3 || (indices.size() - firstIndex) % 3)
+      firstIndex >= indices.size() || firstIndex % 3 || (indexEnd - firstIndex) % 3)
     return {};
   Chart chart{firstIndex, uint32_t(mapping.size[0] + 1), uint32_t(mapping.size[1] + 1), {}};
-  chart.texcoords.reserve((indices.size() - firstIndex) * 2);
-  for (size_t corner = firstIndex; corner < indices.size(); ++corner) {
+  chart.texcoords.reserve((indexEnd - firstIndex) * 2);
+  for (size_t corner = firstIndex; corner < indexEnd; ++corner) {
     if (indices[corner] < vertexBase || indices[corner] - vertexBase >= coordinates.size())
       return {};
     const auto &uv = coordinates[indices[corner] - vertexBase];
@@ -72,5 +79,70 @@ inline std::optional<Chart> capture(const Mapping &mapping, uint32_t firstIndex,
   if (!area)
     return {}; // an entirely collinear fan has no surface lightmap area
   return chart;
+}
+// Rounded collinear BSP fan corners can reverse a microscopic triangle. Keep
+// that geometry on probes, but preserve charted contiguous ranges around it.
+// Native validation still checks every published range for positive overlap.
+inline std::vector<Chart> captureFan(const Mapping &mapping, uint32_t firstIndex,
+                                     const std::vector<uint32_t> &indices, uint32_t vertexBase,
+                                     const std::vector<std::array<float, 2>> &coordinates) {
+  if (auto full = capture(mapping, firstIndex, indices, vertexBase, coordinates))
+    return {std::move(*full)};
+  if (firstIndex >= indices.size() || firstIndex % 3 || (indices.size() - firstIndex) % 3 ||
+      mapping.size[0] < 1 || mapping.size[1] < 1 || mapping.size[0] >= 4096 || mapping.size[1] >= 4096)
+    return {};
+  std::vector<std::array<float, 2>> corners;
+  for (size_t i = firstIndex; i < indices.size(); ++i) {
+    if (indices[i] < vertexBase || indices[i] - vertexBase >= coordinates.size() ||
+        ((i - firstIndex) % 3 == 0 && indices[i] != indices[firstIndex]))
+      return {};
+    auto uv = coordinates[indices[i] - vertexBase];
+    for (uint32_t axis = 0; axis < 2; ++axis) {
+      const float extent = float(mapping.size[axis]);
+      if (!std::isfinite(uv[axis]) || uv[axis] < -.01f || uv[axis] > extent + .01f)
+        return {};
+      uv[axis] = std::clamp(uv[axis], 0.f, extent);
+    }
+    corners.push_back(uv);
+  }
+  const auto area = [&](size_t i) {
+    const auto a = corners[i], b = corners[i + 1], c = corners[i + 2];
+    return (double(b[0]) - a[0]) * (double(c[1]) - a[1]) - (double(b[1]) - a[1]) * (double(c[0]) - a[0]);
+  };
+  double dominant = 0;
+  for (size_t i = 0; i < corners.size(); i += 3)
+    if (std::abs(area(i)) > std::abs(dominant))
+      dominant = area(i);
+  if (std::abs(dominant) <= 1e-12)
+    return {};
+  std::vector<size_t> excluded;
+  for (size_t i = 0; i < corners.size(); i += 3) {
+    const double signedArea = area(i);
+    double longest = 0;
+    for (size_t edge = 0; edge < 3; ++edge) {
+      const auto a = corners[i + edge], b = corners[i + (edge + 1) % 3];
+      longest = std::max(longest, std::hypot(double(b[0]) - a[0], double(b[1]) - a[1]));
+    }
+    // Perpendicular UV altitude, independent of triangle length/atlas density.
+    // Larger folds still refuse the complete face instead of hiding bad data.
+    if (std::abs(signedArea) <= longest * 1e-4) {
+      excluded.push_back(size_t(firstIndex) + i);
+      continue;
+    }
+    if (signedArea * dominant < 0)
+      return {};
+  }
+  if (excluded.empty())
+    return {};
+  std::vector<Chart> result;
+  size_t first = firstIndex;
+  excluded.push_back(indices.size());
+  for (const auto end : excluded) {
+    if (first < end)
+      if (auto chart = capture(mapping, uint32_t(first), indices, vertexBase, coordinates, end))
+        result.push_back(std::move(*chart));
+    first = end + 3;
+  }
+  return result;
 }
 } // namespace proxy::bsp::lightmaps

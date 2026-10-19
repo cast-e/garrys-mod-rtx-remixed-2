@@ -2851,8 +2851,8 @@ bool build(const Bsp &bsp) {
         std::vector<std::array<float, 2>> coordinates;
         for (const auto &corner : corners)
           coordinates.push_back(lightmapMapping.project(corner.data()));
-        if (auto chart = lightmaps::capture(lightmapMapping, uint32_t(firstIndex), g.indices, base, coordinates))
-          g.lightmaps.push_back(std::move(*chart));
+        for (auto &chart : lightmaps::captureFan(lightmapMapping, uint32_t(firstIndex), g.indices, base, coordinates))
+          g.lightmaps.push_back(std::move(chart));
       }
       toWorld(g, base, firstIndex);
       g_world.triangles += uint32_t(corners.size() - 2);
