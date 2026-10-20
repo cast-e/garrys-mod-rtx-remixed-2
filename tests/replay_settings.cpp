@@ -58,6 +58,13 @@ int main() {
           "Pitch, yaw and roll retain an orthonormal camera basis");
   refuse("replay.position=1 2 3 4");
   refuse("replay.position=nan 0 0");
+  const auto receivers = parse("replay.probeReceiver=1 2 3 16\nreplay.probeReceiver=4 5 6 8\n");
+  require(receivers.probeReceivers.size() == 2 && receivers.probeReceivers[1][3] == 8 &&
+              parse("").probeReceivers.empty(),
+          "Dynamic probe receiver fixtures are explicit, ordered and absent by default");
+  refuse("replay.probeReceiver=0 0 0 0");
+  refuse("replay.probeReceiver=0 0 0 4097");
+  refuse("replay.probeReceiver=0 0 nan 16");
   refuse("replay.fov=179");
   refuse("replay.unknown=1");
   require(!proxy::replay::Settings{}.freezeAnimation &&

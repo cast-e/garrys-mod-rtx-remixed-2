@@ -55,7 +55,7 @@ test('Source loose and VPK relative model paths', source_fs_test,
   args: [meson.current_build_dir() / 'source-fs-readback'])
 
 # A diagnostic map host: reads installed content without injecting into the game.
-executable('bsp-replay', 'tools/bsp_replay.cpp', 'tools/replay_settings.cpp', 'tools/replay_timing.cpp',
+executable('bsp-replay', 'tools/bsp_replay.cpp', 'tools/replay_settings.cpp', 'tools/replay_timing.cpp', 'tools/probe_receivers.cpp',
   'src/bsp_world.cpp', 'src/cubemap_overrides.cpp', 'src/source_fs.cpp', 'src/lzma_source.cpp',
   'src/texture_formats.cpp', 'src/texture_categories.cpp', 'src/pbr_rules.cpp',
   'src/material_shading.cpp', 'src/source_lights.cpp', 'src/styled_lights.cpp', 'deps/lzma/LzmaDec.c',

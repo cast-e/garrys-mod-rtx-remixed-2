@@ -4,6 +4,7 @@
 // into Source or writes installed content. Static VMTs only; no material proxies.
 #include "bsp_world.h"
 #include "replay_settings.h"
+#include "probe_receivers.h"
 #include "replay_timing.h"
 #include "replay_host_profile.h"
 #include <remix/remix_bake_ext.h>
@@ -330,6 +331,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   uint32_t lastState = ~0u;
   bool reportedPendingInputs = false;
   const auto start = Clock::now();
+  proxy::replay::ProbeReceivers receivers(api, settings.probeReceivers);
   for (unsigned frame = 0; frame < frames; ++frame) {
     const auto frameStart = Clock::now();
     MSG message;
@@ -341,6 +343,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     for (auto handle : lights)
       check(api.DrawLightInstance(handle), "DrawLightInstance");
     proxy::bsp::submit(lookup);
+    receivers.draw();
     // The production publisher owns readiness checks. Calling it while assets
     // resolve also reports the actual reason, rather than hiding it behind this
     // diagnostic host's generic "waiting for retained map inputs" state.

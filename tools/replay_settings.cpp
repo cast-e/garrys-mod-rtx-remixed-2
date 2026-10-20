@@ -50,6 +50,12 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
         settings.position = numbers<3>(value);
       else if (key == "replay.angles")
         settings.angles = numbers<3>(value);
+      else if (key == "replay.probeReceiver") {
+        const auto receiver = numbers<4>(value);
+        if (receiver[3] <= 0 || receiver[3] > 4096 || settings.probeReceivers.size() >= 64)
+          throw std::runtime_error("Probe receivers require a radius in (0,4096] and at most 64 entries");
+        settings.probeReceivers.push_back(receiver);
+      }
       else if (key == "replay.probeBounds") {
         const auto bounds = numbers<6>(value);
         for (size_t axis = 0; axis < 3; ++axis)
