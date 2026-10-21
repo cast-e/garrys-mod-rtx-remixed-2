@@ -182,9 +182,21 @@ The content root is read-only; `OPENREMIX_PROXY_CONTENT_ROOT` supplies that
 same override when embedding the loader in another host. Search paths are
 initialized once per process.
 
+Standalone replays can mount other installed Source games through
+`OPENREMIX_PROXY_CONTENT_MOUNTS`, a semicolon-separated list of absolute game
+content directories (for example, `E:/SteamLibrary/steamapps/common/Half-Life 2 Deathmatch/hl2mp`).
+Each root supplies loose files and its original `*_dir.vpk` archives without
+copying assets. Listed roots are searched in order, after loose addons and
+before stock GMod archives; loose files precede archives within each root.
+Set the list before starting replay. This is useful when a map references
+game-specific materials that GMod's shared content does not contain.
+
 This is a static map diagnostic, with static VMT shading and textures. Engine
-material proxies, styled lights, dynamic entities, particles, game UI and the
-engine's sky rendering are absent. Animated textures remain unresolved. Missing
+material proxies, gameplay entities, particles, game UI and the engine's sky
+rendering are absent. `replay.styledLights=1` includes authored controllable
+lights at `replay.lightStyleValue`; it does not simulate engine lightstyle animation.
+`replay.freezeAnimation=1` captures animated textures at frame zero; otherwise
+they remain unresolved. Missing
 assets and incomplete static props keep baking pending; direct lighting can
 still render. A successful screenshot alone does not establish that baking
 finished: check the logged bake state (`3`, active `1`). Increase the frame

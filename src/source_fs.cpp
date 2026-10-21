@@ -179,13 +179,59 @@ bool g_indexed = false;
 Pak g_pak;
 
 void addLoose(const std::wstring &directory) {
-  g_paths.push_back({g_root + L"\\" + directory + L"\\", nullptr});
+  g_paths.push_back({directory + L"\\", nullptr});
 }
 
 void addVpk(const std::wstring &dirFile) {
   auto vpk = std::make_unique<Vpk>();
-  if (vpk->open(g_root + L"\\" + dirFile))
+  if (vpk->open(dirFile))
     g_paths.push_back({{}, std::move(vpk)});
+}
+
+// Standalone hosts lack the engine's mounted-game filesystem. Explicit roots
+// provide its loose files and original VPKs without copying or renaming assets.
+void addContentMounts() {
+  const wchar_t *option = L"OPENREMIX_PROXY_CONTENT_MOUNTS";
+  const DWORD size = GetEnvironmentVariableW(option, nullptr, 0);
+  if (!size) return;
+  std::wstring value(size, L'\0');
+  const DWORD length = GetEnvironmentVariableW(option, value.data(), size);
+  if (!length || length >= size) return;
+  value.resize(length);
+  std::vector<std::wstring> mounted;
+  for (size_t begin = 0; begin < value.size();) {
+    const size_t separator = value.find(L';', begin);
+    std::wstring directory = value.substr(begin, separator == std::wstring::npos ? separator : separator - begin);
+    begin = separator == std::wstring::npos ? value.size() : separator + 1;
+    const auto first = directory.find_first_not_of(L" \t");
+    if (first == std::wstring::npos) continue;
+    directory = directory.substr(first, directory.find_last_not_of(L" \t") - first + 1);
+    std::replace(directory.begin(), directory.end(), L'/', L'\\');
+    while (directory.size() > 3 && directory.back() == L'\\') directory.pop_back();
+    const bool absolute = (directory.size() >= 3 && directory[1] == L':' && directory[2] == L'\\') ||
+                          directory.rfind(L"\\\\", 0) == 0;
+    const DWORD attributes = absolute ? GetFileAttributesW(directory.c_str()) : INVALID_FILE_ATTRIBUTES;
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+      std::fprintf(stderr, "Source content mount skipped (expected an absolute directory): %ls\n", directory.c_str());
+      continue;
+    }
+    if (std::any_of(mounted.begin(), mounted.end(), [&](const auto &previous) {
+          return _wcsicmp(previous.c_str(), directory.c_str()) == 0;
+        })) continue;
+    mounted.push_back(directory);
+    addLoose(directory);
+    WIN32_FIND_DATAW found;
+    HANDLE files = FindFirstFileW((directory + L"\\*_dir.vpk").c_str(), &found);
+    std::vector<std::wstring> archives;
+    if (files != INVALID_HANDLE_VALUE) {
+      do {
+        if (!(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) archives.push_back(found.cFileName);
+      } while (FindNextFileW(files, &found));
+      FindClose(files);
+    }
+    std::sort(archives.begin(), archives.end());
+    for (const auto &archive : archives) addVpk(directory + L"\\" + archive);
+  }
 }
 
 // GMod's own file system (filesystem_stdio IBaseFileSystem, VBaseFileSystem011)
@@ -260,23 +306,24 @@ void index() {
   if (find != INVALID_HANDLE_VALUE) {
     do
       if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && found.cFileName[0] != L'.')
-        addLoose(std::wstring(L"garrysmod\\addons\\") + found.cFileName);
+        addLoose(g_root + L"\\garrysmod\\addons\\" + found.cFileName);
     while (FindNextFileW(find, &found));
     FindClose(find);
   }
-  addVpk(L"garrysmod\\garrysmod_dir.vpk");
+  addContentMounts();
+  addVpk(g_root + L"\\garrysmod\\garrysmod_dir.vpk");
   for (const wchar_t *vpk : {L"hl2_textures", L"hl2_sound_vo_english", L"hl2_sound_misc", L"hl2_misc"})
-    addVpk(std::wstring(L"sourceengine\\") + vpk + L"_dir.vpk");
-  addVpk(L"platform\\platform_misc_dir.vpk");
-  addLoose(L"garrysmod");
-  addLoose(L"sourceengine");
-  addLoose(L"platform");
-  addLoose(L"garrysmod\\download");
+    addVpk(g_root + L"\\sourceengine\\" + vpk + L"_dir.vpk");
+  addVpk(g_root + L"\\platform\\platform_misc_dir.vpk");
+  addLoose(g_root + L"\\garrysmod");
+  addLoose(g_root + L"\\sourceengine");
+  addLoose(g_root + L"\\platform");
+  addLoose(g_root + L"\\garrysmod\\download");
   // Mounted game content (cfg/mount.cfg) as shipped with GMod, then the
   // missing-content fallbacks.
-  addVpk(L"sourceengine\\content_hl2_dir.vpk");
-  addVpk(L"sourceengine\\content_cstrike_dir.vpk");
-  addVpk(L"garrysmod\\fallbacks_dir.vpk");
+  addVpk(g_root + L"\\sourceengine\\content_hl2_dir.vpk");
+  addVpk(g_root + L"\\sourceengine\\content_cstrike_dir.vpk");
+  addVpk(g_root + L"\\garrysmod\\fallbacks_dir.vpk");
 }
 
 } // namespace

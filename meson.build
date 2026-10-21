@@ -53,6 +53,8 @@ source_fs_test = executable('source-fs-test', 'tests/source_fs.cpp', 'src/source
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('Source loose and VPK relative model paths', source_fs_test,
   args: [meson.current_build_dir() / 'source-fs-readback'])
+test('Source default content roots without optional game mounts', source_fs_test,
+  args: [meson.current_build_dir() / 'source-fs-default-readback', 'without-mounts'])
 
 # A diagnostic map host: reads installed content without injecting into the game.
 executable('bsp-replay', 'tools/bsp_replay.cpp', 'tools/replay_settings.cpp', 'tools/replay_timing.cpp', 'tools/probe_receivers.cpp',
