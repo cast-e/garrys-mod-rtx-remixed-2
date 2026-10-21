@@ -77,6 +77,13 @@ The proxy diagnostics report backend selection and bake progress. Optional
 `OPENREMIX_PROXY_LOG_ENGINE_ERRORS=1` also records engine startup error messages
 before forwarding them to the engine's normal error handler.
 
+`OPENREMIX_PROXY_QUERY_PROFILE=1` adds event, occlusion and other D3D9 query
+rates to `bin/win64/shaderapi_proxy_slots.txt`: issued queries, polls, pending
+results, failures, flush requests and time inside `GetData`. This is opt-in
+instrumentation, not a performance baseline. Time excludes the engine's sleeps
+between polls and does not measure query lifetime. Query arguments and driver
+results remain unchanged; separate resource vtables retain their own methods.
+
 ### Persistent testing installation
 
 `tools/deploy_testing.py` installs a complete Windows runtime package into an

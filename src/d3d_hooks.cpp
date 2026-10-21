@@ -13,11 +13,13 @@
 #include "host_passes.h"
 #include "shader_bytecode.h"
 #include "d3d_method.h"
+#include "query_profile.h"
 
 #include <algorithm>
 #include <psapi.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -639,8 +641,22 @@ SetScissorRectFn g_setScissorRect = nullptr;
 SetSamplerStateFn g_setSamplerState = nullptr;
 SetShaderConstantIFn g_setVertexShaderConstantI = nullptr, g_setPixelShaderConstantI = nullptr;
 SetShaderConstantBFn g_setVertexShaderConstantB = nullptr, g_setPixelShaderConstantB = nullptr;
-QueryIssueFn g_queryIssue = nullptr;
-QueryGetDataFn g_queryGetData = nullptr;
+ResourceMethod<QueryIssueFn> g_queryIssue;
+ResourceMethod<QueryGetDataFn> g_queryGetData;
+QueryProfile g_queryProfile;
+
+bool queryProfiling() {
+  static const bool enabled = [] {
+    const char *value = std::getenv("OPENREMIX_PROXY_QUERY_PROFILE");
+    return value && *value && std::strcmp(value, "0") != 0;
+  }();
+  return enabled;
+}
+
+QueryProfile::Kind queryKind(D3DQUERYTYPE type) {
+  return type == D3DQUERYTYPE_EVENT ? QueryProfile::Event :
+         type == D3DQUERYTYPE_OCCLUSION ? QueryProfile::Occlusion : QueryProfile::Other;
+}
 // Occlusion queries between Issue(BEGIN) and Issue(END).
 std::unordered_set<IDirect3DQuery9 *> g_openOcclusion;
 // Render targets the game issued occlusion queries on, by the frame it last
@@ -1073,7 +1089,15 @@ void drawOccluders(IDirect3DDevice9 *dev) {
 }
 
 HRESULT STDMETHODCALLTYPE queryGetData(IDirect3DQuery9 *query, void *data, DWORD size, DWORD flags) {
-  const HRESULT hr = g_queryGetData(query, data, size, flags);
+  const auto original = g_queryGetData.original(query);
+  const bool profile = queryProfiling();
+  const uint64_t start = profile ? nowUs() : 0;
+  const HRESULT hr = original(query, data, size, flags);
+  if (profile) {
+    const uint64_t elapsed = nowUs() - start;
+    g_queryProfile.polled(queryKind(query->GetType()), hr == S_FALSE, FAILED(hr),
+                         (flags & D3DGETDATA_FLUSH) != 0, elapsed);
+  }
   if (hr == S_OK && data && size >= 4 && query->GetType() == D3DQUERYTYPE_OCCLUSION)
     ++(*static_cast<const DWORD *>(data) ? g_stats.queriesVisible : g_stats.queriesHidden);
   return hr;
@@ -1100,7 +1124,10 @@ HRESULT STDMETHODCALLTYPE queryIssue(IDirect3DQuery9 *query, DWORD flags) {
     else if (flags & D3DISSUE_END)
       g_openOcclusion.erase(query);
   }
-  return g_queryIssue(query, flags);
+  const HRESULT hr = g_queryIssue.original(query)(query, flags);
+  if (queryProfiling() && SUCCEEDED(hr) && (flags & D3DISSUE_END))
+    g_queryProfile.issued(queryKind(query->GetType()));
+  return hr;
 }
 
 // A depth clear takes the occluders with it: the engine clears depth between
@@ -1124,9 +1151,10 @@ HRESULT STDMETHODCALLTYPE clear(IDirect3DDevice9 *dev, DWORD count, const D3DREC
 
 HRESULT STDMETHODCALLTYPE createQuery(IDirect3DDevice9 *dev, D3DQUERYTYPE type, IDirect3DQuery9 **out) {
   const HRESULT hr = g_createQuery(dev, type, out);
-  if (SUCCEEDED(hr) && out && *out && type == D3DQUERYTYPE_OCCLUSION && !g_queryIssue) {
-    hookSlot(vtableOf(*out), kQueryIssue, &queryIssue, g_queryIssue);
-    hookSlot(vtableOf(*out), kQueryGetData, &queryGetData, g_queryGetData);
+  if (SUCCEEDED(hr) && out && *out && (type == D3DQUERYTYPE_OCCLUSION || queryProfiling())) {
+    void **table = vtableOf(*out);
+    g_queryIssue.install(table, kQueryIssue, &queryIssue);
+    g_queryGetData.install(table, kQueryGetData, &queryGetData);
   }
   return hr;
 }
@@ -1850,6 +1878,8 @@ void requestTargetContents(const void *texture) { wantTargetContents(texture); }
 void dumpStatistics(FILE *out) {
   const uint32_t frames = g_stats.frames.exchange(0);
   const double f = frames ? frames : 1;
+  if (queryProfiling())
+    g_queryProfile.dump(out, f);
   fprintf(out, "== D3D9 per frame (%u frames): DIP %.1f (%.0f prims) DP %.1f DIPUP %.1f DPUP %.1f, depth DIP %.1f (occlusion queries %.1f: visible %.1f hidden %.1f; occluder passes %.1f, depth clears after one %.1f)\n",
           frames, g_stats.dip.exchange(0) / f, g_stats.dipPrims.exchange(0) / f, g_stats.dp.exchange(0) / f,
           g_stats.dipUP.exchange(0) / f, g_stats.dpUP.exchange(0) / f, g_stats.depthDraws.exchange(0) / f, g_stats.occlusionQueries.exchange(0) / f,
