@@ -7,14 +7,15 @@
 using namespace proxy::cubemaps;
 static_assert(REMIXAPI_REFLECTION_VOLUMES_MAX_EXT >= 64, "Use the matching OpenRemix SDK for 64-volume authoring");
 namespace {
-  unsigned calls = 0, clears = 0;
+  unsigned calls = 0, clears = 0, volumeCount = 0;
   uint64_t revision = 0;
   int32_t priority = 0;
   void require(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
   remixapi_ErrorCode REMIXAPI_CALL publish(const remixapi_ReflectionVolumesInfoEXT *request) {
     if (!request) { ++clears; return REMIXAPI_ERROR_CODE_SUCCESS; }
-    require(request->sceneId == 42 && request->volumeCount == 1, "Watcher preserves scene scope and count");
-    ++calls; revision = request->revision; priority = request->volumes[0].priority;
+    require(request->sceneId == 42 && request->volumeCount <= 1, "Watcher preserves scene scope and bounded count");
+    ++calls; revision = request->revision; volumeCount = request->volumeCount;
+    if (volumeCount) priority = request->volumes[0].priority;
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 }
@@ -63,6 +64,12 @@ int main(int argc, char **argv) try {
   bytes[8] ^= 1; write();
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 2 && clears == 0, "Invalid edits preserve the previously valid override");
+  bytes[8] ^= 1; // Restore the valid BSP fingerprint before publishing an empty authored set.
+  bytes.resize(44);
+  const uint32_t empty = 0; std::memcpy(bytes.data()+40, &empty, sizeof(empty)); write();
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 3 && revision == 3 && volumeCount == 0 && clears == 0,
+          "A saved empty authored set explicitly disables local cubemaps rather than restoring automatic placement");
   std::filesystem::remove(file);
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(clears == 1, "Removing the sidecar restores automatic cubemaps");

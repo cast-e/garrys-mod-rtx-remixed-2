@@ -87,6 +87,8 @@ namespace proxy::cubemaps {
       m_error.clear();
       std::fprintf(stderr, "Authored cubemap bounds: %zu volumes, revision %llu\n", volumes.size(),
                    static_cast<unsigned long long>(m_revision));
+      if (volumes.empty())
+        std::fprintf(stderr, "Local cubemaps disabled by empty authored set; remove the sidecar to restore automatic placement\n");
     } catch (const std::exception &error) {
       if (m_error != error.what()) std::fprintf(stderr, "Authored cubemap bounds: %s\n", error.what());
       m_error = error.what();
