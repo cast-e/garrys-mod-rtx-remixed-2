@@ -172,6 +172,10 @@ file accepts `key = value` lines (and `#` comments):
 bsp-replay.exe runtime/remix.dll "E:/SteamLibrary/steamapps/common/GarrysMod" gm_flatgrass output.png 1800
 ```
 
+Keep the runtime filename `remix.dll`: the production BSP adapter resolves
+optional extensions by that module name. For comparison builds, use separate
+directories rather than renaming the DLL; replay rejects renamed runtimes.
+
 The runtime's SDL DLL must be on `PATH`. Use an isolated `REMIX_CONFIG_DIR`
 (or OpenRemix's `tests/isolated_config.py`) to preserve your normal profiles.
 The content root is read-only; `OPENREMIX_PROXY_CONTENT_ROOT` supplies that

@@ -472,11 +472,17 @@ LRESULT CALLBACK replayWindowProcedure(HWND window, UINT message, WPARAM wparam,
 int main(int argc, char **argv) {
   if (argc < 5) {
     std::fprintf(stderr,
-                 "Usage: bsp-replay runtime.dll content-root map output.png [frames=600] [settings.cfg]\n");
+                 "Usage: bsp-replay path/to/remix.dll content-root map output.png [frames=600] [settings.cfg]\n");
     return 2;
   }
   SetEnvironmentVariableA("OPENREMIX_PROXY_CONTENT_ROOT", argv[2]);
   const auto path = std::filesystem::absolute(argv[1]).wstring();
+  // The production BSP adapter resolves optional extensions through this module
+  // name. Renamed comparison DLLs otherwise silently omit static bake inputs.
+  if (_wcsicmp(std::filesystem::path(path).filename().c_str(), L"remix.dll") != 0) {
+    std::fprintf(stderr, "BSP replay requires the runtime filename remix.dll; use separate directories for comparison builds\n");
+    return 2;
+  }
   SetDllDirectoryW(std::filesystem::path(path).parent_path().c_str());
   WNDCLASSW windowClass{};
   windowClass.lpfnWndProc = replayWindowProcedure;
