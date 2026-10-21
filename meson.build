@@ -47,6 +47,11 @@ bake_charts_test = executable('bsp-bake-charts-test', 'tests/bake_charts.cpp',
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('BSP surface lightmap chart mapping', bake_charts_test)
 
+bake_materials_test = executable('bsp-bake-materials-test', 'tests/bake_materials.cpp',
+  include_directories: include_directories('src'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('BSP bake readiness follows retained material dependencies', bake_materials_test)
+
 source_fs_test = executable('source-fs-test', 'tests/source_fs.cpp', 'src/source_fs.cpp',
   'src/lzma_source.cpp', 'deps/lzma/LzmaDec.c',
   include_directories: include_directories('src'),

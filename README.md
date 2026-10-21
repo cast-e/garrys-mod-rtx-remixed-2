@@ -84,6 +84,12 @@ instrumentation, not a performance baseline. Time excludes the engine's sleeps
 between polls and does not measure query lifetime. Query arguments and driver
 results remain unchanged; separate resource vtables retain their own methods.
 
+Static bake readiness follows materials referenced by retained brush, overlay,
+terrain and prop geometry. Unused BSP material-table entries and engine-owned sky
+geometry do not block publication. Required unresolved materials still block it;
+unsupported shader inputs need an explicit bake representation rather than a
+placeholder marked as ready.
+
 ### Persistent testing installation
 
 `tools/deploy_testing.py` installs a complete Windows runtime package into an

@@ -3,6 +3,7 @@
 #include "source_lights.h"
 #include "bsp_world.h"
 #include "bake_charts.h"
+#include "bake_materials.h"
 
 #include "lzma_source.h"
 #include "source_fs.h"
@@ -786,6 +787,9 @@ struct World {
   std::vector<std::unique_ptr<WaterNormal>> waterNormals; // by water material, shared by name
   std::string map;
   std::vector<Material> materials;
+  std::vector<uint32_t> bakeMaterials;
+  uint64_t bakeMaterialVersion = ~0ull;
+  size_t bakeMaterialCount = 0;
   std::unordered_map<std::string, int> materialIndex;
   std::map<std::pair<std::string, int>, PropModel> propModels; // by model path and skin
   std::vector<std::unique_ptr<PropModel>> clippedSkyModels; // stable per-placement ownership
@@ -3227,8 +3231,13 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
       g_world.bakeReason = "brush geometry is still loading";
       return;
     }
-  if (std::any_of(g_world.materials.begin(), g_world.materials.end(),
-                  [](const auto &material) { return !material.resolved; })) {
+  if (g_world.bakeMaterialVersion != g_world.submitVersion ||
+      g_world.bakeMaterialCount != g_world.materials.size()) {
+    g_world.bakeMaterials = bakeMaterialDependencies(g_world);
+    g_world.bakeMaterialVersion = g_world.submitVersion;
+    g_world.bakeMaterialCount = g_world.materials.size();
+  }
+  if (firstUnreadyBakeMaterial(g_world.bakeMaterials, g_world.materials)) {
     g_world.bakeReason = "static materials are still loading";
     return;
   }
