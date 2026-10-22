@@ -246,6 +246,11 @@ to both presentation and frozen map baking. HDR-only sky materials are reported 
 unsupported rather than silently decoded as LDR. Dynamic sky material proxies and
 server sky overrides are outside this static replay.
 
+The final replay log includes actual tracing samples, bounces, accumulation frames,
+sample sequence and scene generation when the runtime exposes tracing statistics.
+An accumulation setting alone does not establish that a reference image converged;
+check the actual history and shader preparation before accepting comparisons.
+
 For procedural skies such as Construct's `painted`, set
 `OPENREMIX_PROXY_BAKE_SKY_REFERENCE` to an existing frozen live `.sky` capture.
 The replay validates its dimensions, format, scale and checksum, reads it without

@@ -513,6 +513,22 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       throw std::runtime_error("Camera path produced no fresh screenshot: " + snapshot);
   if (measurement.enabled())
     measurement.write(output, map);
+  // Requested accumulation is not evidence that history survived scene updates.
+  // Keep the final submitted tracing state beside replay receipts so a noisy
+  // reference cannot be mistaken for a converged multi-frame image.
+  const auto tracingStatistics = reinterpret_cast<PFN_remixapi_GetTracingStatisticsEXT>(
+      GetProcAddress(library, "remixapi_GetTracingStatisticsEXT"));
+  if (tracingStatistics) {
+    remixapi_TracingStatisticsEXT tracing{};
+    tracing.structSize = sizeof(tracing);
+    check(tracingStatistics(&tracing), "GetTracingStatistics");
+    std::printf("Final tracing state: samples=%u bounces=%u accumulation=%u frames=%llu "
+                "sequence=%llu sceneGeneration=%llu\n",
+                tracing.samplesPerPixel, tracing.indirectBounces, tracing.accumulationEnabled,
+                static_cast<unsigned long long>(tracing.accumulationCount),
+                static_cast<unsigned long long>(tracing.sampleSequence),
+                static_cast<unsigned long long>(tracing.sceneGeneration));
+  }
   if (profile && requestedProbes && lastWrite(diagnostics / "probes.json") != previousProbeReport) {
     auto report = std::filesystem::path(output);
     report.replace_extension(".probes.json");
