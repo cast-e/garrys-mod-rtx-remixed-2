@@ -80,6 +80,13 @@ For another install, invoke `python -m probe_editor` with an explicit `--runtime
 The adapter's `OPENREMIX_PROXY_CUBEMAP_BOUNDS` environment variable can select a diagnostic sidecar
 instead of the default map-specific path. The JSON itself is not parsed by the game.
 
+`references/gm_construct.json` preserves the user's two authored volumes for the skylit main
+space and adjoining area. Use these as a bounds-fitting reference, not as complete map coverage.
+Keep the independent capture positions and priorities (1 and 0), and check the stored BSP
+fingerprint before comparing or publishing. The file does not replace the live authoring document
+in `_work/cubemaps`; later edits there remain the user's working copy. Further viewport/editor
+polish is deferred to the planned C# tooling work.
+
 The matching OpenRemix SDK/runtime supports at most 64 authored volumes, and capture points must remain inside
 their projection bounds. Rotation and signed overlap priority are supported. Bounds/priority changes
 reuse filtered radiance without new rays. Moving or adding a capture traces only the affected cubemap;
