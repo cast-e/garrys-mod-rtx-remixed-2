@@ -46,11 +46,22 @@ struct Recorder {
     bake = reinterpret_cast<PFN_remixapi_GetBakeStatisticsEXT>(GetProcAddress(module, "remixapi_GetBakeStatisticsEXT"));
     std::fputs("unixMs,hostMs,presentStatus,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
                "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,"
-               "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash\n", file.get());
+               "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash,"
+               "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight\n", file.get());
   }
 
-  void sample(double hostMs, remixapi_ErrorCode presentStatus) {
+  void sample(double hostMs, remixapi_ErrorCode presentStatus,
+              HWND hostWindow, PFN_remixapi_GetWindowState getWindowState) {
     if (!file) return;
+    // Record observations without changing focus. Missing window state is an
+    // explicit failure status, never an assumed focused measurement.
+    remixapi_WindowState window{};
+    const auto windowStatus = getWindowState ? getWindowState(&window) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+    const auto foreground = GetForegroundWindow();
+    DWORD foregroundProcess = 0;
+    if (foreground) GetWindowThreadProcessId(foreground, &foregroundProcess);
+    const bool hostFocused = hostWindow && foreground == hostWindow;
+    const bool processFocused = foregroundProcess == GetCurrentProcessId();
     remixapi_GpuPassTimingsEXT timings{};
     timings.structSize = sizeof(timings);
     const bool available = presentStatus == REMIXAPI_ERROR_CODE_SUCCESS && gpu &&
@@ -73,7 +84,7 @@ struct Recorder {
     const auto unixMs = (ticks - 116444736000000000ull) / 10000;
     const bool fresh = available && timings.frame != lastGpu;
     std::fprintf(file.get(), "%llu,%.6f,%u,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,"
-        "%.6f,%.6f,%.6f,%.6f,%u,%llu\n",
+        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u\n",
         static_cast<unsigned long long>(unixMs), hostMs, unsigned(presentStatus), frame.recordMilliseconds, frame.fenceMilliseconds,
         unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
         timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
@@ -82,15 +93,18 @@ struct Recorder {
         pass("Forward+ reflection resolve and composition"), pass("Forward+ opaque depth prepass"),
         pass("Forward+ lit viewmodel overlay"), pass("Forward+ viewmodel sun shadow"),
         pass("Forward+ viewmodel local self shadows"), lighting.state,
-        static_cast<unsigned long long>(lighting.activeHash));
+        static_cast<unsigned long long>(lighting.activeHash), unsigned(hostFocused), unsigned(processFocused),
+        unsigned(windowStatus), unsigned(window.focused), unsigned(window.minimized),
+        window.drawableWidth, window.drawableHeight);
     if (available) lastGpu = timings.frame;
     if (++rows % 120 == 0) std::fflush(file.get());
   }
 };
 }
 
-void sample(double hostFrameMilliseconds, remixapi_ErrorCode presentStatus) {
+void sample(double hostFrameMilliseconds, remixapi_ErrorCode presentStatus,
+            HWND hostWindow, PFN_remixapi_GetWindowState getWindowState) {
   static Recorder recorder;
-  recorder.sample(hostFrameMilliseconds, presentStatus);
+  recorder.sample(hostFrameMilliseconds, presentStatus, hostWindow, getWindowState);
 }
 }

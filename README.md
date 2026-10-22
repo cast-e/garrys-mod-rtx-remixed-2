@@ -84,6 +84,16 @@ instrumentation, not a performance baseline. Time excludes the engine's sleeps
 between polls and does not measure query lifetime. Query arguments and driver
 results remain unchanged; separate resource vtables retain their own methods.
 
+`OPENREMIX_PROXY_FRAME_PROFILE=<new CSV path>` records host frame intervals and
+completed native CPU/GPU timings. Appended focus fields distinguish the Source
+host window, any foreground window in the game process, and the native output's
+focus/minimized/drawable state. Reject unfocused or minimized intervals when
+comparing gameplay performance; a failed `windowStatus` is unknown state. GPU
+readbacks can repeat across host frames, so use `gpuNew` for GPU timing summaries.
+The profiler observes focus without changing it and performs no window/API calls
+or file writes when disabled. A forced process stop may leave a truncated final
+CSV record; discard that trailing fragment rather than treating it as a frame.
+
 Static bake readiness follows materials referenced by retained brush, overlay,
 terrain and prop geometry. Unused BSP material-table entries and engine-owned sky
 geometry do not block publication. Required unresolved materials still block it;

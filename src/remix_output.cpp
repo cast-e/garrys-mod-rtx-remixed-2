@@ -5296,7 +5296,7 @@ void onPresent() {
     diag::stage("OpenRemix Present returned %u (previous %u)", unsigned(presentResult), unsigned(previousPresentResult));
     previousPresentResult = presentResult;
   }
-  frame_profile::sample(g_frameIntervalMs, presentResult);
+  frame_profile::sample(g_frameIntervalMs, presentResult, g_gameWindow, g_api.GetWindowState);
   if (mark)
     diag::stage("frame %u: presented", presents);
   logWindowState(presents);
