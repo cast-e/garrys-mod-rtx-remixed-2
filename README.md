@@ -164,6 +164,12 @@ Optional replay settings `replay.measureFrames = 240` and
 `replay.warmupSeconds = 5` also requires five seconds of warmup (default: three).
 The host waits for the selected backend, requested denoiser/TAA, complete materials
 and (for Forward+) an active bake with any authored cubemap edit fully published.
+It also requires `remixapi_GetPreparationStatisticsEXT`: loading and preparation must
+finish, all requested pipelines must complete, and compilation failures reject capture.
+Preparation restarting after warmup rejects the run; a continuous preparation wait is
+bounded to five minutes. An adjacent `.preparation.json` records the final readiness.
+Older runtimes without this independent export are rejected for measurement/camera paths.
+Manual fixed-frame runs remain available with a warning that preparation is unverifiable.
 Reflection capture failures reject the measurement. Older runtimes without the optional
 bake-statistics readiness tail cannot verify an authored sidecar and are rejected for that case.
 Camera paths use the same reflection readiness gate, and completed measurements request a fresh
@@ -317,7 +323,8 @@ Each key contains a frame index, eye XYZ and pitch/yaw/roll. The first index mus
 be zero; indices increase through at most 1024, with at most 64 keys. Positions
 interpolate linearly and angles take the shortest route. Motion starts after a
 completed bake, authored-reflection publication, material readiness and `replay.warmupFrames`
-consecutive ready frames. A changed bake stops the run. The tool saves a numbered image every
+consecutive ready frames, including renderer preparation. A changed bake or restarted preparation
+stops the run. The tool saves a numbered image every
 `replay.cameraCaptureInterval` path frames (default 32) and at the endpoint, a final ordinary
 output image, and an adjacent
 `.path.csv` trace. With `REMIX_CONFIG_DIR` set, it requests a fresh endpoint probe

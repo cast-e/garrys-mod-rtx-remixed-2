@@ -1,4 +1,5 @@
 #include "replay_settings.h"
+#include "replay_readiness.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -22,6 +23,24 @@ remixapi_ErrorCode REMIXAPI_CALL variable(const char *key, const char *value) {
 float dot(remixapi_Float3D a, remixapi_Float3D b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
 } // namespace
 int main() {
+  remixapi_PreparationStatisticsEXT preparation{};
+  preparation.structSize = sizeof(preparation);
+  require(proxy::replay::preparationReady(preparation), "Idle renderer preparation is ready");
+  preparation.pending = 1;
+  require(!proxy::replay::preparationReady(preparation), "Active backend does not bypass pending preparation");
+  preparation.pending = 0; preparation.loading = 1;
+  require(!proxy::replay::preparationReady(preparation), "Loading renderer is not capture-ready");
+  preparation.loading = 0; preparation.pipelinesRequested = 35; preparation.pipelinesCompleted = 29;
+  require(!proxy::replay::preparationReady(preparation), "Unfinished scene variants hold reference warmup");
+  preparation.pipelinesCompleted = 35;
+  require(proxy::replay::preparationReady(preparation), "Completed scene variants release warmup");
+  auto rejectedPreparation = [&] {
+    try { proxy::replay::preparationReady(preparation); } catch (const std::runtime_error &) { return; }
+    require(false, "Failed or incompatible preparation must reject capture");
+  };
+  preparation.failed = 1; rejectedPreparation(); preparation.failed = 0;
+  preparation.pipelinesFailed = 1; rejectedPreparation(); preparation.pipelinesFailed = 0;
+  preparation.structSize = 0; rejectedPreparation();
   remixapi_Interface api{};
   api.SetConfigVariable = variable;
   const auto path = std::filesystem::path("replay-settings-test.cfg");

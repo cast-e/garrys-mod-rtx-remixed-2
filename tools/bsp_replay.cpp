@@ -8,6 +8,7 @@
 #include "replay_timing.h"
 #include "replay_host_profile.h"
 #include "replay_sky.h"
+#include "replay_readiness.h"
 #include <remix/remix_bake_ext.h>
 #include <cstring>
 #include <remix/remix_native_ext.h>
@@ -352,12 +353,21 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       GetProcAddress(library, "remixapi_GetBakeStatisticsEXT"));
   const auto backendStatistics = reinterpret_cast<PFN_remixapi_GetBackendCapabilitiesEXT>(
       GetProcAddress(library, "remixapi_GetBackendCapabilitiesEXT"));
+  const auto preparationStatistics = reinterpret_cast<PFN_remixapi_GetPreparationStatisticsEXT>(
+      GetProcAddress(library, "remixapi_GetPreparationStatisticsEXT"));
   const auto gpuStatistics = reinterpret_cast<PFN_remixapi_GetGpuPassTimingsEXT>(
       GetProcAddress(library, "remixapi_GetGpuPassTimingsEXT"));
   const auto denoisingStatistics = reinterpret_cast<PFN_remixapi_GetDenoisingStatisticsEXT>(
       GetProcAddress(library, "remixapi_GetDenoisingStatisticsEXT"));
   proxy::replay::TimingWindow measurement(settings.measureFrames, settings.warmupFrames,
                                           settings.warmupSeconds);
+  if (!preparationStatistics && (measurement.enabled() || !settings.cameraPath.empty()))
+    throw std::runtime_error("Runtime lacks preparation readiness; cannot verify reference or measurement captures");
+  if (!preparationStatistics)
+    std::fprintf(stderr, "Runtime lacks preparation readiness; fixed-frame output may still be preparing\n");
+  bool preparationReadyState = !preparationStatistics;
+  remixapi_PreparationStatisticsEXT finalPreparation{};
+  Clock::time_point preparationPendingSince{};
   proxy::replay::HostProfile hostProfile(library, output, measurement.enabled());
   if (measurement.enabled()) {
     if (!backendStatistics || !gpuStatistics || (settings.waitForBake && !statistics))
@@ -431,11 +441,32 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     // resolve also reports the actual reason, rather than hiding it behind this
     // diagnostic host's generic "waiting for retained map inputs" state.
     proxy::bsp::publishBakeScene(bakeLights, styledLights, settings.probeBounds ? &*settings.probeBounds : nullptr);
-    if (frame == frames - 3 || (measurementEnd != ~0u && frame == measurementEnd + 1) ||
-        (pathEnd != ~0u && frame == pathEnd + 32))
+    if (preparationReadyState && (frame == frames - 3 ||
+        (measurementEnd != ~0u && frame == measurementEnd + 1) ||
+        (pathEnd != ~0u && frame == pathEnd + 32)))
       check(api.RequestPresentedScreenshot(output), "RequestPresentedScreenshot");
     check(api.Present(nullptr), "Present");
     const double hostMs = std::chrono::duration<double, std::milli>(Clock::now() - frameStart).count();
+    if (preparationStatistics) {
+      remixapi_PreparationStatisticsEXT preparation{};
+      preparation.structSize = sizeof(preparation);
+      check(preparationStatistics(&preparation), "GetPreparationStatistics");
+      finalPreparation = preparation;
+      preparationReadyState = proxy::replay::preparationReady(preparation);
+      if (preparationReadyState) preparationPendingSince = {};
+      else {
+        if (preparationPendingSince == Clock::time_point{}) preparationPendingSince = Clock::now();
+        if (Clock::now() - preparationPendingSince > std::chrono::minutes(5))
+          throw std::runtime_error("Renderer preparation did not complete within five minutes");
+        if (frame % 120 == 0)
+          std::printf("Preparation waiting: pending %u, loading %u, pipelines %llu/%llu\n",
+                      preparation.pending, preparation.loading,
+                      static_cast<unsigned long long>(preparation.pipelinesCompleted),
+                      static_cast<unsigned long long>(preparation.pipelinesRequested));
+      }
+      if (!preparationReadyState && (pathReady || measurementEnd != ~0u))
+        throw std::runtime_error("Renderer preparation restarted during the completed capture window");
+    }
     remixapi_BakeStatisticsEXT stats = {};
     stats.structSize = sizeof(stats);
     if (statistics) {
@@ -461,7 +492,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       if (stats.state == REMIXAPI_BAKE_FAILED_EXT)
         throw std::runtime_error(std::string("Camera path bake failed: ") + stats.status);
       if (!pathReady) {
-        pathWarmup = stats.active && materials.complete() && reflectionsReady(stats, map) ? pathWarmup + 1 : 0;
+        pathWarmup = preparationReadyState && stats.active && materials.complete() && reflectionsReady(stats, map)
+                         ? pathWarmup + 1 : 0;
         pathReady = pathWarmup >= settings.warmupFrames;
         if (pathReady) pathHash = stats.activeHash;
       } else if (!stats.active || stats.activeHash != pathHash)
@@ -489,7 +521,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       remixapi_GpuPassTimingsEXT timing{};
       timing.structSize = sizeof(timing);
       check(gpuStatistics(&timing), "GetGpuPassTimings");
-      bool ready = materials.complete() && backend.activeBackend == backend.requestedBackend &&
+      bool ready = preparationReadyState && materials.complete() && backend.activeBackend == backend.requestedBackend &&
                    (backend.activeBackend != 2 || !settings.waitForBake || stats.active);
       if (backend.activeBackend == 2 && settings.waitForBake)
         ready &= reflectionsReady(stats, map);
@@ -576,6 +608,16 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
                 static_cast<unsigned long long>(tracing.accumulationCount),
                 static_cast<unsigned long long>(tracing.sampleSequence),
                 static_cast<unsigned long long>(tracing.sceneGeneration));
+  }
+  if (preparationStatistics) {
+    std::filesystem::path report(output);
+    report.replace_extension(".preparation.json");
+    std::ofstream(report) << "{\n  \"pending\": " << finalPreparation.pending
+        << ",\n  \"loading\": " << finalPreparation.loading
+        << ",\n  \"failed\": " << finalPreparation.failed
+        << ",\n  \"pipelinesRequested\": " << finalPreparation.pipelinesRequested
+        << ",\n  \"pipelinesCompleted\": " << finalPreparation.pipelinesCompleted
+        << ",\n  \"pipelinesFailed\": " << finalPreparation.pipelinesFailed << "\n}\n";
   }
   if (profile && requestedProbes && lastWrite(diagnostics / "probes.json") != previousProbeReport) {
     auto report = std::filesystem::path(output);
