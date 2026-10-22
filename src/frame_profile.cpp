@@ -47,7 +47,7 @@ struct Recorder {
     std::fputs("unixMs,hostMs,presentStatus,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
                "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,"
                "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash,"
-               "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight\n", file.get());
+               "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight,cpuStatus,bakeStatus\n", file.get());
   }
 
   void sample(double hostMs, remixapi_ErrorCode presentStatus,
@@ -68,10 +68,10 @@ struct Recorder {
                            gpu(&timings) == REMIXAPI_ERROR_CODE_SUCCESS && timings.available;
     remixapi_FramePerformanceEXT frame{};
     frame.structSize = sizeof(frame);
-    if (cpu) cpu(&frame);
+    const auto cpuStatus = cpu ? cpu(&frame) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     remixapi_BakeStatisticsEXT lighting{};
     lighting.structSize = sizeof(lighting);
-    if (bake) bake(&lighting);
+    const auto bakeStatus = bake ? bake(&lighting) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
     auto pass = [&](const char *name) {
       if (available)
         for (uint32_t i = 0; i < timings.passCount && i < REMIXAPI_GPU_PASS_TIMING_CAPACITY_EXT; ++i)
@@ -84,7 +84,7 @@ struct Recorder {
     const auto unixMs = (ticks - 116444736000000000ull) / 10000;
     const bool fresh = available && timings.frame != lastGpu;
     std::fprintf(file.get(), "%llu,%.6f,%u,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,"
-        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u\n",
+        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
         static_cast<unsigned long long>(unixMs), hostMs, unsigned(presentStatus), frame.recordMilliseconds, frame.fenceMilliseconds,
         unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
         timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
@@ -95,7 +95,7 @@ struct Recorder {
         pass("Forward+ viewmodel local self shadows"), lighting.state,
         static_cast<unsigned long long>(lighting.activeHash), unsigned(hostFocused), unsigned(processFocused),
         unsigned(windowStatus), unsigned(window.focused), unsigned(window.minimized),
-        window.drawableWidth, window.drawableHeight);
+        window.drawableWidth, window.drawableHeight, unsigned(cpuStatus), unsigned(bakeStatus));
     if (available) lastGpu = timings.frame;
     if (++rows % 120 == 0) std::fflush(file.get());
   }

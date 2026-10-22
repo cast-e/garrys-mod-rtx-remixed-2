@@ -95,6 +95,9 @@ host window, any foreground window in the game process, and the native output's
 focus/minimized/drawable state. Reject unfocused or minimized intervals when
 comparing gameplay performance; a failed `windowStatus` is unknown state. GPU
 readbacks can repeat across host frames, so use `gpuNew` for GPU timing summaries.
+The appended `cpuStatus` and `bakeStatus` retain each statistics API return code.
+A failed query is unknown; zero-filled CPU/bake fields are not evidence of a zero-cost
+frame, absent lighting or a rebake.
 The profiler observes focus without changing it and performs no window/API calls
 or file writes when disabled. A forced process stop may leave a truncated final
 CSV record; discard that trailing fragment rather than treating it as a frame.
