@@ -327,8 +327,9 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   const char *profile = std::getenv("REMIX_CONFIG_DIR");
   const std::filesystem::path diagnostics =
       profile ? std::filesystem::path(profile) : std::filesystem::path();
-  const auto previousProbeReport = lastWrite(diagnostics / "probes.json");
+  auto previousProbeReport = lastWrite(diagnostics / "probes.json");
   bool requestedProbes = false;
+  bool requestedPathReport = false;
   unsigned measurementEnd = ~0u;
   uint32_t lastState = ~0u;
   bool reportedPendingInputs = false;
@@ -421,7 +422,21 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         if (pathReady) pathHash = stats.activeHash;
       } else if (!stats.active || stats.activeHash != pathHash)
         throw std::runtime_error("Bake changed during camera path");
-      if (pathEnd != ~0u && frame >= pathEnd + 60) break;
+      if (profile && pathEnd != ~0u && frame > pathEnd && !requestedPathReport) {
+        // The first report describes initial bake publication. Reflection-only
+        // authoring can publish later without changing the diffuse bake hash.
+        // Request a fresh endpoint report instead of attaching that old state
+        // to images recorded after movement and authoring have completed.
+        previousProbeReport = lastWrite(diagnostics / "probes.json");
+        std::ofstream(diagnostics / "probes.request");
+        requestedProbes = requestedPathReport = true;
+      }
+      if (pathEnd != ~0u && frame >= pathEnd + 60) {
+        if (profile && (!requestedPathReport ||
+            lastWrite(diagnostics / "probes.json") == previousProbeReport))
+          throw std::runtime_error("Fresh endpoint reflection report did not arrive during path drain");
+        break;
+      }
     }
     if (measurement.enabled() && !measurement.complete()) {
       remixapi_BackendCapabilitiesEXT backend{};

@@ -289,7 +289,11 @@ interpolate linearly and angles take the shortest route. Motion starts after a
 completed bake, material readiness and `replay.warmupFrames` consecutive ready
 frames. A changed bake stops the run. The tool saves a numbered image every 32
 path frames and at the endpoint, a final ordinary output image, and an adjacent
-`.path.csv` trace. This bounded diagnostic is separate from fixed-view GPU
+`.path.csv` trace. With `REMIX_CONFIG_DIR` set, it requests a fresh endpoint probe
+report and fails if that report does not arrive during the drain. Check its
+`authoredReflections` state before interpreting authored coverage; main-bake
+readiness alone does not prove reflection-only publication has finished.
+This bounded diagnostic is separate from fixed-view GPU
 measurements: `replay.measureFrames` must be zero and `replay.waitForBake` must
 remain enabled. It does not simulate collisions, gameplay or material proxies.
 
