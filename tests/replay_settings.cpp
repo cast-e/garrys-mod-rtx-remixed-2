@@ -66,6 +66,21 @@ int main() {
           "Camera paths interpolate positions and take the short angular route across 360 degrees");
   require(proxy::replay::pathCamera(pathSettings, 1000).position.x == 64 &&
               parse("").cameraPath.empty(), "Camera paths clamp at their endpoint and default off");
+  require(pathSettings.cameraCaptureInterval == 32 && proxy::replay::capturePathFrame(pathSettings, 0) &&
+              proxy::replay::capturePathFrame(pathSettings, 32) && proxy::replay::capturePathFrame(pathSettings, 64) &&
+              !proxy::replay::capturePathFrame(pathSettings, 31), "Default camera capture cadence is preserved");
+  const auto dense = parse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=17 1 0 0 0 0 0\n"
+                           "replay.cameraCaptureInterval=4");
+  require(proxy::replay::capturePathFrame(dense, 16) && proxy::replay::capturePathFrame(dense, 17) &&
+              !proxy::replay::capturePathFrame(dense, 18), "Unaligned path endpoints are captured once, never past the path");
+  require(parse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=63 1 0 0 0 0 0\n"
+                "replay.cameraCaptureInterval=1").cameraCaptureInterval == 1,
+          "Dense capture accepts the exact 64-image boundary");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=64 1 0 0 0 0 0\nreplay.cameraCaptureInterval=1");
+  for (const auto *value : {"0", "1025", "1.5", "nan", "-1"}) {
+    const auto text = std::string("replay.cameraCaptureInterval=") + value;
+    refuse(text.c_str());
+  }
   refuse("replay.cameraKey=1 0 0 0 0 0 0");
   refuse("replay.cameraKey=0 0 0 0 0 0 0");
   refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=0 1 0 0 0 0 0");

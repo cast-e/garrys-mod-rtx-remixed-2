@@ -310,18 +310,24 @@ For repeatable moving-view checks, add ordered camera keys instead:
 ```ini
 replay.cameraKey = 0 -2300 -1600 -80 0 0 0
 replay.cameraKey = 128 -1700 -1600 -80 0 0 0
+replay.cameraCaptureInterval = 4
 ```
 
 Each key contains a frame index, eye XYZ and pitch/yaw/roll. The first index must
 be zero; indices increase through at most 1024, with at most 64 keys. Positions
 interpolate linearly and angles take the shortest route. Motion starts after a
-completed bake, material readiness and `replay.warmupFrames` consecutive ready
-frames. A changed bake stops the run. The tool saves a numbered image every 32
-path frames and at the endpoint, a final ordinary output image, and an adjacent
+completed bake, authored-reflection publication, material readiness and `replay.warmupFrames`
+consecutive ready frames. A changed bake stops the run. The tool saves a numbered image every
+`replay.cameraCaptureInterval` path frames (default 32) and at the endpoint, a final ordinary
+output image, and an adjacent
 `.path.csv` trace. With `REMIX_CONFIG_DIR` set, it requests a fresh endpoint probe
 report and fails if that report does not arrive during the drain. Check its
 `authoredReflections` state before interpreting authored coverage; main-bake
 readiness alone does not prove reflection-only publication has finished.
+The interval must be an integer in [1,1024]; at most 64 path screenshots are allowed, including
+the endpoint. Increase the interval for longer paths. Dense captures drain a previous pending
+readback with a bounded retry, without advancing the camera or adding Present calls. Capture
+readbacks can stall the host, so path-frame motion is not a real-time speed or FPS measurement.
 This bounded diagnostic is separate from fixed-view GPU
 measurements: `replay.measureFrames` must be zero and `replay.waitForBake` must
 remain enabled. It does not simulate collisions, gameplay or material proxies.

@@ -61,6 +61,12 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
         settings.cameraPath.push_back({uint32_t(frame), {values[1], values[2], values[3]},
                                       {values[4], values[5], values[6]}});
       }
+      else if (key == "replay.cameraCaptureInterval") {
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), settings.cameraCaptureInterval);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+            !settings.cameraCaptureInterval || settings.cameraCaptureInterval > 1024)
+          throw std::runtime_error("Camera capture interval must be an integer in [1,1024]");
+      }
       else if (key == "replay.probeReceiver") {
         const auto receiver = numbers<4>(value);
         if (receiver[3] <= 0 || receiver[3] > 4096 || settings.probeReceivers.size() >= 64)
@@ -140,7 +146,17 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
   if (!settings.cameraPath.empty() &&
       (settings.cameraPath.size() < 2 || settings.measureFrames || !settings.waitForBake))
     throw std::runtime_error("Camera paths require two or more keys, bake readiness, and no fixed-view timing window");
+  if (!settings.cameraPath.empty()) {
+    const auto last = settings.cameraPath.back().frame, interval = settings.cameraCaptureInterval;
+    const auto count = last / interval + 1 + uint32_t(last % interval != 0);
+    if (count > 64) throw std::runtime_error("Camera path exceeds 64 screenshots; increase its capture interval");
+  }
   return settings;
+}
+bool capturePathFrame(const Settings &settings, uint32_t frame) {
+  return !settings.cameraPath.empty() && settings.cameraCaptureInterval &&
+         frame <= settings.cameraPath.back().frame &&
+         (frame % settings.cameraCaptureInterval == 0 || frame == settings.cameraPath.back().frame);
 }
 remixapi_CameraInfoParameterizedEXT pathCamera(const Settings &settings, uint32_t frame) {
   if (settings.cameraPath.empty())

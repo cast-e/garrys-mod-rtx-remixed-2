@@ -54,6 +54,22 @@ void check(remixapi_ErrorCode result, const char *operation) {
     throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(unsigned(result)));
 }
 
+void requestPathScreenshot(remixapi_Interface &api, const std::string &path) {
+  const auto deadline = Clock::now() + std::chrono::seconds(10);
+  for (;;) {
+    const auto result = api.RequestPresentedScreenshot(path.c_str());
+    if (result != REMIXAPI_ERROR_CODE_ALREADY_EXISTS) {
+      check(result, "Request path screenshot");
+      return;
+    }
+    if (Clock::now() >= deadline) throw std::runtime_error("Previous path screenshot did not drain in 10 seconds");
+    // Request waits for the previous CPU frame; PumpEvents can then retire its
+    // fenced readback. Do not advance the camera or add extra Present calls.
+    check(api.PumpEvents(), "Drain path screenshot");
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
 std::filesystem::file_time_type lastWrite(const std::filesystem::path &path) {
   std::error_code error;
   const auto time = std::filesystem::last_write_time(path, error);
@@ -393,12 +409,12 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       medium.transmittanceColor = {waterColor[0], waterColor[1], waterColor[2]};
       medium.transmittanceMeasurementDistance = waterDistance;
       std::string snapshot;
-      if (pathFrame % 32 == 0 || pathFrame == settings.cameraPath.back().frame) {
+      if (proxy::replay::capturePathFrame(settings, pathFrame)) {
         const auto target = std::filesystem::path(output);
         snapshot = (target.parent_path() / (target.stem().string() + "-path-" +
                     std::to_string(pathFrame) + ".png")).string();
         pathSnapshots.emplace(snapshot, lastWrite(snapshot));
-        check(api.RequestPresentedScreenshot(snapshot.c_str()), "Request path screenshot");
+        requestPathScreenshot(api, snapshot);
       }
       pathTrace << pathFrame << ',' << params.position.x << ',' << params.position.y << ','
                 << params.position.z << ',' << snapshot << '\n';
