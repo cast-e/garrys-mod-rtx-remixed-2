@@ -4754,13 +4754,19 @@ void onPresent() {
     // their previous transforms and bones (motion vectors, denoiser history).
     // Source does not say which entity a draw belongs to: every instance of a
     // cached mesh takes over the id of the nearest instance of that mesh in
-    // the previous frame (root bone or transform translation, within 64
-    // units); the rest get new ids.
+    // the previous frames (root bone or transform translation, within 64
+    // units); the rest get new ids. Instances not drawn are remembered for
+    // kTrackedKeep frames: a prop that leaves the view (Source's culling) and
+    // comes back keeps its id, and with it the runtime's light tree slots of
+    // its emissive triangles (a new id rebuilt part of the tree, ~30 ms with
+    // a pile of emissive props at the edge of the view, every frame).
     struct Tracked {
       uint64_t id;
       float position[3];
       bool taken;
+      uint32_t age; // frames since it was drawn
     };
+    constexpr uint32_t kTrackedKeep = 600;
     static std::unordered_map<uint64_t, std::vector<Tracked>> tracked;
     static uint64_t nextTrackedId = 1;
     std::unordered_map<uint64_t, std::vector<Tracked>> nextTracked;
@@ -4776,6 +4782,9 @@ void onPresent() {
           float d2 = 0;
           for (int i = 0; i < 3; ++i)
             d2 += (candidate.position[i] - position[i]) * (candidate.position[i] - position[i]);
+          // Those drawn last frame first: a remembered one counts at twice its distance.
+          if (candidate.age)
+            d2 *= 4;
           if (d2 < bestDistance2) {
             bestDistance2 = d2;
             best = &candidate;
@@ -4788,7 +4797,7 @@ void onPresent() {
       } else {
         id = 0x7000000000000000ull | nextTrackedId++; // static ids are 64-bit hashes: collisions are negligible
       }
-      nextTracked[group].push_back({id, {position[0], position[1], position[2]}, false});
+      nextTracked[group].push_back({id, {position[0], position[1], position[2]}, false, 0});
       return id;
     };
     std::unordered_map<uint64_t, bool> seen; // multipass draws: the first pass wins
@@ -5025,6 +5034,12 @@ void onPresent() {
       g_api.DrawInstance(&info);
       ++g_stats.submitted;
     }
+    for (auto &[group, list] : tracked)
+      for (auto &entry : list)
+        if (!entry.taken && entry.age + 1 < kTrackedKeep) {
+          entry.age++;
+          nextTracked[group].push_back(entry);
+        }
     tracked = std::move(nextTracked);
     {
       Timer bspTimer(g_usBsp, &g_totalUs[3]);
