@@ -10,6 +10,7 @@
 #include "engine_shadows.h"
 #include "remix_output.h"
 #include "remix_ui.h"
+#include "vb_origins.h"
 #include "vtable_proxy.h"
 
 #include <algorithm>
@@ -266,7 +267,7 @@ const KnownInterface kKnown[] = {
     {"ShaderShadow010", nullptr},
     {"DebugTextureInfo001", nullptr},
     {"MaterialSystemHardwareConfig012", nullptr},
-    {"VBAllocTracker001", nullptr},
+    {"VBAllocTracker001", [](proxy::Kind *k) { proxy::vb_origins::install(k); }},
     // Material system interface handed to the shader API.
     {"VShaderUtil001",
      [](proxy::Kind *k) { proxy::setHook(k, 12, reinterpret_cast<void *>(&shaderUtilRestoreShaderObjects)); }},

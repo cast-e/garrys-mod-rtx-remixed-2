@@ -11,6 +11,7 @@
 #include "host_passes.h"
 #include "particles.h"
 #include "texture_categories.h"
+#include "vb_origins.h"
 #include <unordered_set>
 
 #include "texture_formats.h"
@@ -74,6 +75,7 @@ struct Stats {
       badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
   std::atomic<uint32_t> setLightKept[4] = {};
   // Unlit and self-illuminated draws (engine_materials): by kind, and why some stayed lit.
+  std::atomic<uint32_t> luaLitDraws{0}; // unlit Lua meshes lit as surfaces (onDraw)
   std::atomic<uint32_t> unlitDraws{0}, selfIllumDraws{0}, selfIllumMaskDraws{0}, selfIllumMaskAlphaDraws{0},
       emissiveLightDraws{0}, unlitVertexColorDraws{0}, modulatedDraws{0}, wireframeDraws{0}, modulatedBlack{0}, modulatedMasked{0}, modulatedMetal{0}, emissiveNoTexture{0}, emissiveMaskNoHash{0},
       emissiveMaskNotUploaded{0}, emissiveCreated{0}, emissiveFailed{0}, emissiveEvicted{0};
@@ -1661,6 +1663,10 @@ float flexScale(const Draw &d) {
 // Converts one indexed draw into a Remix mesh. Returns nullptr when the draw
 // cannot be represented yet.
 float g_liftVertexStep = 0; // added lift per vertex index (render thread; set by onDraw for decals)
+// Forwarded vertex colours keep their hue only: each scaled so its largest
+// channel is full (render thread; set by onDraw for lit Lua meshes, whose
+// colours carry baked shading the path tracer replaces).
+bool g_hueColors = false;
 // `normalOffset` > 0 lifts the surface off its receiver (decals, see onDraw):
 // along the vertex normals, or without them (DecalModulate's vertices are a
 // position and a texture coordinate) along the summed face normals, e1 x e2
@@ -1803,6 +1809,12 @@ remixapi_MeshHandle buildMesh(const Draw &d, uint64_t hash, uint32_t bonesPerVer
     if (col)
       if (const uint8_t *c = fetch(col, v, 4)) { // D3DCOLOR in memory, the runtime's layout
         std::memcpy(&out.color, c, 4);
+        if (g_hueColors) {
+          const uint32_t r = (out.color >> 16) & 255, g = (out.color >> 8) & 255, b = out.color & 255;
+          const uint32_t top = std::max({r, g, b});
+          out.color = top ? (out.color & 0xff000000u) | (r * 255 / top) << 16 | (g * 255 / top) << 8 | b * 255 / top
+                          : out.color | 0xffffff;
+        }
         anyRgb |= out.color & 0xffffff;
       }
   }
@@ -3730,10 +3742,34 @@ void onDraw(const Draw &d) {
   if (!additiveDraw && !multiply)
     shading = shadingFor(d.texture0, engine_materials::current());
   probeMaterialDraw(d.texture0, engine_materials::current(), shading, additiveDraw, multiply);
+  if (shading.mode == engine_materials::Shading::Unlit)
+    vb_origins::countUnlit(d.streams[0].buffer);
+  // Lua-built meshes (a Lua Mesh(): InfMap terrain and scripted maps) are
+  // static buffers made outside every engine allocation bracket
+  // (vb_origins). Their unlit materials are lit as surfaces: such maps bake
+  // their shading into vertex colours for want of lighting, which the path
+  // tracer provides. Model sprites, screens and 3D2D panels (engine buffers)
+  // stay unlit. OPENREMIX_PROXY_LUA_MESHES_LIT=0 keeps them unlit.
+  static const bool litLuaMeshes = [] {
+    char v[8] = {};
+    return !(GetEnvironmentVariableA("OPENREMIX_PROXY_LUA_MESHES_LIT", v, sizeof(v)) && v[0] == '0');
+  }();
+  bool luaLit = false, luaColors = false;
+  if (litLuaMeshes && shading.mode == engine_materials::Shading::Unlit) {
+    vb_origins::Origin origin;
+    luaLit = vb_origins::find(d.streams[0].buffer, origin) && !origin.allocator && !origin.dynamic;
+    if (luaLit) {
+      luaColors = shading.vertexColor;
+      shading = {};
+      shading.base = engine_materials::current().base;
+      ++g_stats.luaLitDraws;
+    }
+  }
   // An unlit material's $vertexcolor: its vertices carry the colour (3D2D
   // panels, sprites). Other COLOR0 streams (baked prop lighting) do not.
   const bool hasColors = findElement(d.elements, D3DDECLUSAGE_COLOR, 0) != nullptr;
   const bool unlitColors = shading.mode == engine_materials::Shading::Unlit && shading.vertexColor && hasColors;
+  const bool hueColors = luaColors && hasColors; // a lit Lua mesh's $vertexcolor: its hue
   // An alpha decal's vertices carry its colour and its fade ($vertexcolor,
   // $vertexalpha: scorch marks and sprays fade out through vertex alpha; the
   // world shaders read both with $vertexcolor alone). mod2x and multiply
@@ -3750,6 +3786,12 @@ void onDraw(const Draw &d) {
                               (bound.vertexAlpha || (bound.lightmapped && bound.vertexColor));
   const bool decalColors = decalColorsEnabled && !unlitColors && decalKind == kDecalAlpha && decalMaterial && hasColors &&
                            (bound.vertexColor || decalAlphaFade);
+  // Vertex colours the mesh carries (texture x vertex colour by default).
+  const bool meshColors = unlitColors || decalColors || hueColors;
+  struct HueScope {
+    explicit HueScope(bool on) { g_hueColors = on; }
+    ~HueScope() { g_hueColors = false; }
+  } hueScope(hueColors);
   if (decalKind == kDecalMod2x && decalMaterial && bound.vertexColor && bound.vertexAlpha)
     ++g_stats.decalModulateFade;
   // Decals over decals: all at one height they were coplanar, and which one a
@@ -3789,6 +3831,7 @@ void onDraw(const Draw &d) {
   static_assert(sizeof(Key) == 3 * sizeof(void *) + 12 * sizeof(uint32_t), "Key must have no padding: it is hashed as bytes");
   uint64_t hash = fnv(&key, sizeof(key)) ^ (lifted ? 0xdeca1deca1deca1ull : 0) ^
                   (unlitColors ? 0xc0105c0105c0105ull : 0) ^ (decalColors ? 0x0decac0105c0105ull : 0) ^
+                  (hueColors ? 0x4e0c0105c0105ull : 0) ^
                   (lifted && windingSign > 0 ? 0x5197000000000000ull : 0);
   // A flexed draw (see flexScale) changes every frame although its own
   // buffers are static. `flexContent` names this frame's deltas: the flex
@@ -3824,8 +3867,8 @@ void onDraw(const Draw &d) {
     FlexMesh &f = g_flexMeshes[flexHash];
     if (!f.handle || f.content != flexContent) {
       const remixapi_MeshHandle refreshed =
-          buildMesh(d, flexHash, bonesPerVertex, &boneCount, 0, unlitColors || decalColors, unlitColors || decalColors,
-                    windingSign, &faceNormals, flex, nullptr, true);
+          buildMesh(d, flexHash, bonesPerVertex, &boneCount, 0, meshColors, meshColors, windingSign, &faceNormals, flex,
+                    nullptr, true);
       if (refreshed) {
         f.handle = refreshed;
         f.content = flexContent;
@@ -3852,8 +3895,8 @@ void onDraw(const Draw &d) {
       ++g_transientDecls[d.declaration];
     }
     // Additive as onPresent classifies it (destination factor ONE): raster only.
-    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, additiveDraw || unlitColors || decalColors,
-                     unlitColors || decalColors, windingSign, &faceNormals, flex);
+    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, additiveDraw || meshColors, meshColors, windingSign,
+                     &faceNormals, flex);
     if (!mesh) {
       g_stats.decalNoMesh += lifted;
       return;
@@ -3870,8 +3913,7 @@ void onDraw(const Draw &d) {
     it->second.lastFrame = g_frame;
     ++g_stats.cacheHits;
   } else {
-    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, unlitColors || decalColors, unlitColors || decalColors,
-                     windingSign, &faceNormals);
+    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, meshColors, meshColors, windingSign, &faceNormals);
     if (!mesh) {
       g_stats.decalNoMesh += lifted;
       return;
@@ -5786,6 +5828,9 @@ void dumpStatistics(FILE *out) {
           g_stats.bspKeptDynamic.exchange(0) / f);
   fprintf(out, "   dropped for the BSP world: static prop draws %.1f, overlay draws %.1f\n",
           g_stats.bspPropsDropped.exchange(0) / f, g_stats.bspOverlaysDropped.exchange(0) / f);
+  vb_origins::write(out, f);
+  fprintf(out, "   Lua meshes lit as surfaces per frame: %.1f (OPENREMIX_PROXY_LUA_MESHES_LIT)\n",
+          g_stats.luaLitDraws.exchange(0) / f);
   bsp::dumpStatistics(out);
   remix_ui::dumpStatistics(out);
   {
