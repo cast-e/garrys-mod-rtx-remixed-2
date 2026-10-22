@@ -81,6 +81,15 @@ int main() {
   refuse("replay.probeReceiver=0 0 0 0");
   refuse("replay.probeReceiver=0 0 0 4097");
   refuse("replay.probeReceiver=0 0 nan 16");
+  const auto reflective = parse("replay.receiverRoughness=.15\nreplay.receiverMetallic=1\nreplay.receiversFollowCamera=1");
+  require(reflective.receiverRoughness == .15f && reflective.receiverMetallic == 1 &&
+              reflective.receiversFollowCamera && !parse("").receiversFollowCamera &&
+              parse("").receiverRoughness == 1 && parse("").receiverMetallic == 0,
+          "Reflective moving receivers are explicit; existing matte world fixtures remain the default");
+  refuse("replay.receiverRoughness=nan");
+  refuse("replay.receiverRoughness=-.1");
+  refuse("replay.receiverMetallic=1.1");
+  refuse("replay.receiversFollowCamera=2");
   refuse("replay.fov=179");
   refuse("replay.unknown=1");
   require(!proxy::replay::Settings{}.freezeAnimation &&

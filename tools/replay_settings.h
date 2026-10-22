@@ -19,6 +19,8 @@ struct Settings {
   std::optional<std::array<float, 6>> probeBounds;
   // Optional dynamic grey spheres: Source-world X,Y,Z,radius. Never bake inputs.
   std::vector<std::array<float, 4>> probeReceivers;
+  float receiverRoughness = 1, receiverMetallic = 0;
+  bool receiversFollowCamera = false;
   float fov = 65;
   uint32_t width = 640, height = 360;
   uint32_t measureFrames = 0, warmupFrames = 120;

@@ -67,6 +67,13 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           throw std::runtime_error("Probe receivers require a radius in (0,4096] and at most 64 entries");
         settings.probeReceivers.push_back(receiver);
       }
+      else if (key == "replay.receiverRoughness" || key == "replay.receiverMetallic") {
+        const float scalar = numbers<1>(value)[0];
+        if (scalar < 0 || scalar > 1)
+          throw std::runtime_error("Receiver material scalars must be in [0,1]");
+        if (key == "replay.receiverRoughness") settings.receiverRoughness = scalar;
+        else settings.receiverMetallic = scalar;
+      }
       else if (key == "replay.probeBounds") {
         const auto bounds = numbers<6>(value);
         for (size_t axis = 0; axis < 3; ++axis)
@@ -98,11 +105,13 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           settings.height = dimension;
       } else if (key == "replay.measureFrames" || key == "replay.warmupFrames" ||
                  key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ||
+                 key == "replay.receiversFollowCamera" ||
                  key == "replay.denoiseFrameDelayMs") {
         uint32_t number = 0;
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
         const uint32_t maximum = key == "replay.denoiseFrameDelayMs" ? 1000 :
-            key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ? 1 : 10000;
+            key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ||
+            key == "replay.receiversFollowCamera" ? 1 : 10000;
         if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || number > maximum ||
             (key == "replay.warmupFrames" && number < 16))
           throw std::runtime_error("Invalid measurement setting: " + key);
@@ -114,6 +123,8 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           settings.waitForBake = number != 0;
         else if (key == "replay.styledLights")
           settings.styledLights = number != 0;
+        else if (key == "replay.receiversFollowCamera")
+          settings.receiversFollowCamera = number != 0;
         else if (key == "replay.denoiseFrameDelayMs")
           settings.denoiseFrameDelayMs = number;
         else

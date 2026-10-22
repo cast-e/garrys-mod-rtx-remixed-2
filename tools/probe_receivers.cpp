@@ -12,7 +12,8 @@ void check(remixapi_ErrorCode result, const char *operation) {
     throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(unsigned(result)));
 }
 }
-ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::array<float, 4>> &positions)
+ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::array<float, 4>> &positions,
+                               float roughness, float metallic)
     : api(api), positions(positions) {
   if (positions.empty()) return;
   try {
@@ -20,7 +21,8 @@ ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::a
     opaque.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
     opaque.albedoConstant = {.5f, .5f, .5f};
     opaque.opacityConstant = 1;
-    opaque.roughnessConstant = 1;
+    opaque.roughnessConstant = roughness;
+    opaque.metallicConstant = metallic;
     opaque.alphaTestType = 7;
     remixapi_MaterialInfo info{};
     info.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
@@ -57,7 +59,8 @@ ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::a
     geometry.hash = 0x70726f62652d6d65ull;
     geometry.surfaces_values = &surface; geometry.surfaces_count = 1;
     check(api.CreateMesh(&geometry, &mesh), "Create diagnostic receiver sphere");
-    std::printf("Diagnostic probe receivers: %zu dynamic matte spheres, excluded from static bake inputs\n", positions.size());
+    std::printf("Diagnostic probe receivers: %zu dynamic spheres, roughness %.3f, metallic %.3f; excluded from static bake inputs\n",
+                positions.size(), roughness, metallic);
   } catch (...) {
     release();
     throw;
@@ -69,7 +72,7 @@ void ProbeReceivers::release() {
   mesh = nullptr; material = nullptr;
 }
 ProbeReceivers::~ProbeReceivers() { release(); }
-void ProbeReceivers::draw() {
+void ProbeReceivers::draw(const remixapi_CameraInfoParameterizedEXT *camera) {
   for (size_t i = 0; i < positions.size(); ++i) {
     remixapi_InstanceIdentityEXT identity{};
     identity.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_IDENTITY_EXT;
@@ -79,9 +82,20 @@ void ProbeReceivers::draw() {
     remixapi_InstanceInfo instance{};
     instance.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
     instance.pNext = &identity; instance.mesh = mesh; instance.doubleSided = 1;
+    auto position = positions[i];
+    if (camera) {
+      const auto &c = *camera;
+      const float eye[3]{c.position.x, c.position.y, c.position.z};
+      const float forward[3]{c.forward.x, c.forward.y, c.forward.z};
+      const float right[3]{c.right.x, c.right.y, c.right.z};
+      const float up[3]{c.up.x, c.up.y, c.up.z};
+      for (uint32_t axis = 0; axis < 3; ++axis)
+        position[axis] = eye[axis] + positions[i][0] * forward[axis] +
+                         positions[i][1] * right[axis] + positions[i][2] * up[axis];
+    }
     for (uint32_t axis = 0; axis < 3; ++axis) {
       instance.transform.matrix[axis][axis] = positions[i][3];
-      instance.transform.matrix[axis][3] = positions[i][axis];
+      instance.transform.matrix[axis][3] = position[axis];
     }
     check(api.DrawInstance(&instance), "Draw diagnostic probe receiver");
   }

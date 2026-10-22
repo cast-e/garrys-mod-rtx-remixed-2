@@ -293,6 +293,15 @@ path frames and at the endpoint, a final ordinary output image, and an adjacent
 measurements: `replay.measureFrames` must be zero and `replay.waitForBake` must
 remain enabled. It does not simulate collisions, gameplay or material proxies.
 
+Diagnostic spheres (`replay.probeReceiver = x y z radius`) default to matte,
+world-fixed receivers. For reflection checks, use `replay.receiverRoughness = .15`
+and `replay.receiverMetallic = 1`. Both scalars accept [0,1]. With
+`replay.receiversFollowCamera = 1`, the sphere coordinates become camera-relative
+forward/right/up offsets; for example `replay.probeReceiver = 64 0 -8 16` keeps a
+reflective sphere ahead of a moving camera. These are ordinary dynamic world
+instances, with world depth and shadows, excluded from the frozen static bake.
+They are diagnostic objects, not viewmodels or authored map replacements.
+
 For a dense local irradiance reference, set `replay.probeBounds` to six finite
 Source coordinates: minimum XYZ followed by maximum XYZ. Each maximum must be
 greater than its minimum. The replay retains the complete geometry, occluders,

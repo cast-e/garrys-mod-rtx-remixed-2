@@ -349,7 +349,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     pathTrace << "pathFrame,x,y,z,screenshot\n";
   }
   const auto start = Clock::now();
-  proxy::replay::ProbeReceivers receivers(api, settings.probeReceivers);
+  proxy::replay::ProbeReceivers receivers(api, settings.probeReceivers,
+                                         settings.receiverRoughness, settings.receiverMetallic);
   for (unsigned frame = 0; frame < frames; ++frame) {
     const auto frameStart = Clock::now();
     MSG message;
@@ -383,7 +384,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     for (auto handle : lights)
       check(api.DrawLightInstance(handle), "DrawLightInstance");
     proxy::bsp::submit(lookup);
-    receivers.draw();
+    receivers.draw(settings.receiversFollowCamera ? &params : nullptr);
     // The production publisher owns readiness checks. Calling it while assets
     // resolve also reports the actual reason, rather than hiding it behind this
     // diagnostic host's generic "waiting for retained map inputs" state.
