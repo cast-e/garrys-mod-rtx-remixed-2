@@ -53,7 +53,7 @@ std::filesystem::path bakeSkyCachePath(uint64_t mapId) noexcept {
 }
 
 BakeSkyImage canonicalBakeSky(const remixapi_TextureInfo &source, float scale,
-                              const std::filesystem::path &file) noexcept {
+                              const std::filesystem::path &file, BakeSkyReuse reuse) noexcept {
   BakeSkyImage result;
   if (file.empty() || !source.data || !source.width || !source.height || source.width > 8192 ||
       source.height > 8192 || source.depth != 1 || source.mipLevels != 1 ||
@@ -85,7 +85,8 @@ BakeSkyImage canonicalBakeSky(const remixapi_TextureInfo &source, float scale,
           width == source.width && height == source.height && storedFormat == format && storedScale == scale) {
         std::vector<uint8_t> previous(bytes);
         in.read(reinterpret_cast<char *>(previous.data()), bytes);
-        if ((XXH3_64bits_withSeed(previous.data(), bytes, seed) | 1) == hash && equivalent(pixels, previous)) {
+        if ((XXH3_64bits_withSeed(previous.data(), bytes, seed) | 1) == hash &&
+            (reuse == BakeSkyReuse::ExactReference || equivalent(pixels, previous))) {
           result.pixels = std::move(previous);
           result.hash = hash;
           result.reused = true;
@@ -94,8 +95,10 @@ BakeSkyImage canonicalBakeSky(const remixapi_TextureInfo &source, float scale,
       }
     }
   } catch (const std::exception &) {
-    // A corrupt/incomplete record is replaced from the current valid capture.
+    // Capture-noise mode recovers below; an explicit diagnostic reference rejects.
   }
+  if (reuse == BakeSkyReuse::ExactReference)
+    return {}; // Never silently replace a requested reference with live pixels.
   try {
     std::filesystem::create_directories(file.parent_path());
     auto temporary = file;

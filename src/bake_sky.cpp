@@ -2,18 +2,31 @@
 #include "bake_sky_cache.h"
 #include <cstdio>
 #include <cwchar>
+#include <cstdlib>
 
 namespace proxy::remix {
 bool BakeSky::capture(const remixapi_Interface &api, const remixapi_TextureInfo &source, float scale) {
   if (m_light)
     return true;
   auto texture = source;
-  const auto stable = canonicalBakeSky(source, scale, bakeSkyCachePath(m_mapId));
+  const char *reference = std::getenv("OPENREMIX_PROXY_BAKE_SKY_REFERENCE");
+  const bool exact = reference && *reference;
+  const auto stable = canonicalBakeSky(source, scale,
+      exact ? std::filesystem::u8path(reference) : bakeSkyCachePath(m_mapId),
+      exact ? BakeSkyReuse::ExactReference : BakeSkyReuse::CaptureNoise);
+  if (exact && !stable.reused) {
+    if (!m_referenceErrorReported)
+      std::fprintf(stderr, "Map-load bake sky: invalid explicit reference; bake sky unavailable\n");
+    m_referenceErrorReported = true;
+    return false;
+  }
+  m_referenceErrorReported = false;
   if (stable.hash)
     texture.hash = stable.hash;
   if (stable.reused) {
     texture.data = stable.pixels.data();
-    std::puts("Map-load bake sky: reused bounded capture-noise reference");
+    std::puts(exact ? "Map-load bake sky: using explicit diagnostic reference"
+                    : "Map-load bake sky: reused bounded capture-noise reference");
   }
   // Own a separate texture so replacing the live dome cannot release this one.
   texture.hash ^= 0x62616b65736b7901ull;
@@ -51,5 +64,6 @@ void BakeSky::reset(const remixapi_Interface &api, uint64_t mapId) {
   m_light = nullptr;
   m_texture = nullptr;
   m_mapId = mapId;
+  m_referenceErrorReported = false;
 }
 } // namespace proxy::remix

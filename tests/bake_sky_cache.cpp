@@ -1,5 +1,6 @@
 #include "bake_sky_cache.h"
 #include <windows.h>
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -34,6 +35,35 @@ int main(int argc, char **argv) {
     source.dataSize = pixels.size();
     const auto first = proxy::remix::canonicalBakeSky(source, 1, file);
     require(first.hash && !first.reused && std::filesystem::exists(file), "Store initial image");
+    {
+      using proxy::remix::BakeSkyReuse;
+      const auto original = image(file.string().c_str());
+      auto changed = pixels;
+      std::fill(changed.begin(), changed.end(), 20);
+      auto live = source;
+      live.data = changed.data();
+      const auto fixed = proxy::remix::canonicalBakeSky(live, 1, file, BakeSkyReuse::ExactReference);
+      require(fixed.reused && fixed.hash == first.hash && fixed.pixels == pixels,
+              "Explicit diagnostic reference uses exact stored pixels despite a changed live sky");
+      require(!proxy::remix::canonicalBakeSky(live, 2, file, BakeSkyReuse::ExactReference).hash,
+              "Explicit reference rejects a different lighting scale without live fallback");
+      live.width = 32; live.height = 8;
+      require(!proxy::remix::canonicalBakeSky(live, 1, file, BakeSkyReuse::ExactReference).hash,
+              "Explicit reference rejects a different shape with the same pixel count");
+      live = source;
+      const auto missing = root / "missing.sky";
+      require(!proxy::remix::canonicalBakeSky(live, 1, missing, BakeSkyReuse::ExactReference).hash &&
+                  !std::filesystem::exists(missing), "Missing explicit reference is never created");
+      require(image(file.string().c_str()) == original, "Diagnostic reads never rewrite the reference");
+      const auto corrupt = root / "corrupt-reference.sky";
+      std::filesystem::copy_file(file, corrupt);
+      { std::fstream stream(corrupt, std::ios::binary | std::ios::in | std::ios::out);
+        stream.seekp(-1, std::ios::end); stream.put(0); }
+      const auto damaged = image(corrupt.string().c_str());
+      require(!proxy::remix::canonicalBakeSky(live, 1, corrupt, BakeSkyReuse::ExactReference).hash &&
+                  image(corrupt.string().c_str()) == damaged,
+              "Corrupt explicit reference rejects without repair or live fallback");
+    }
     ++pixels[0];
     const auto noise = proxy::remix::canonicalBakeSky(source, 1, file);
     require(noise.reused && noise.hash == first.hash && noise.pixels[0] == 100,

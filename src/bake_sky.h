@@ -13,6 +13,7 @@ public:
 
 private:
   uint64_t m_mapId = 0;
+  bool m_referenceErrorReported = false;
   remixapi_TextureHandle m_texture = nullptr;
   remixapi_LightHandle m_light = nullptr;
 };

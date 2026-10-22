@@ -9,10 +9,14 @@ struct BakeSkyImage {
   uint64_t hash = 0;
   bool reused = false;
 };
+enum class BakeSkyReuse { CaptureNoise, ExactReference };
 std::filesystem::path bakeSkyCachePath(uint64_t mapId) noexcept;
 // Reuse only an essentially identical RGBA8 capture. The returned pixels, not
 // just their hash, must be used for baking. Larger changes replace the record.
-// Invalid/unwritable caches fall back to the supplied image.
+// Invalid/unwritable caches fall back to the supplied image in CaptureNoise mode.
+// ExactReference is a read-only diagnostic: require matching shape/scale and a
+// valid checksum, reuse pixels regardless of the live capture, or return empty.
 BakeSkyImage canonicalBakeSky(const remixapi_TextureInfo &source, float scale,
-                              const std::filesystem::path &file) noexcept;
+                              const std::filesystem::path &file,
+                              BakeSkyReuse reuse = BakeSkyReuse::CaptureNoise) noexcept;
 } // namespace proxy::remix
