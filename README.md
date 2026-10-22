@@ -163,7 +163,12 @@ Optional replay settings `replay.measureFrames = 240` and
 `replay.warmupFrames = 600` collect a bounded steady-state GPU timing window.
 `replay.warmupSeconds = 5` also requires five seconds of warmup (default: three).
 The host waits for the selected backend, requested denoiser/TAA, complete materials
-and (for Forward+) an active bake. `replay.waitForBake = 0` permits explicit
+and (for Forward+) an active bake with any authored cubemap edit fully published.
+Reflection capture failures reject the measurement. Older runtimes without the optional
+bake-statistics readiness tail cannot verify an authored sidecar and are rejected for that case.
+Camera paths use the same reflection readiness gate, and completed measurements request a fresh
+probe report so diagnostics describe the final image rather than initial diffuse publication.
+`replay.waitForBake = 0` permits explicit
 unbaked experiments. Warmup accepts distinct completed GPU frames; duplicate or
 unavailable results are ignored. Backend, bake-hash and resolution changes restart
 the window. Both the frame and elapsed-time warmup requirements must be met;
@@ -224,7 +229,11 @@ game-specific materials that GMod's shared content does not contain.
 
 This is a static map diagnostic, with static VMT shading and textures. Engine
 material proxies, gameplay entities, particles, game UI and the engine's sky
-rendering are absent. `replay.styledLights=1` includes authored controllable
+rendering are absent. Static sky lighting is supported: the relay loads the map's six LDR skybox
+textures into a linear-filtered dome for rendering and baking. Procedural painted skies require a
+validated frozen live capture through `OPENREMIX_PROXY_BAKE_SKY_REFERENCE`; HDR-only sky materials
+and animated sky proxies remain unsupported and are reported explicitly.
+`replay.styledLights=1` includes authored controllable
 lights at `replay.lightStyleValue`; it does not simulate engine lightstyle animation.
 `replay.freezeAnimation=1` captures animated textures at frame zero; otherwise
 they remain unresolved. Missing

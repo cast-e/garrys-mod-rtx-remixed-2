@@ -29,6 +29,26 @@ namespace {
 using proxy::engine_materials::Shading;
 using Clock = std::chrono::steady_clock;
 
+bool authoredOverridePresent(const char *map) {
+  const char *override = std::getenv("OPENREMIX_PROXY_CUBEMAP_BOUNDS");
+  const char *root = std::getenv("OPENREMIX_PROXY_CONTENT_ROOT");
+  const auto path = override && *override ? std::filesystem::u8path(override)
+      : std::filesystem::u8path(root ? root : "") / "garrysmod/data/openremix/cubemaps" /
+          (std::string(map) + ".cubemaps.bin");
+  return std::filesystem::exists(path);
+}
+
+bool reflectionsReady(const remixapi_BakeStatisticsEXT &statistics, const char *map) {
+  if (statistics.structSize < sizeof(statistics)) {
+    if (authoredOverridePresent(map))
+      throw std::runtime_error("Runtime lacks authored reflection readiness statistics");
+    return true;
+  }
+  if (statistics.reflectionFailed)
+    throw std::runtime_error("Authored reflection capture failed; refusing an incomplete measurement");
+  return !statistics.reflectionRequested || (!statistics.reflectionPending && statistics.reflectionActive);
+}
+
 void check(remixapi_ErrorCode result, const char *operation) {
   if (result != REMIXAPI_ERROR_CODE_SUCCESS)
     throw std::runtime_error(std::string(operation) + " failed: " + std::to_string(unsigned(result)));
@@ -414,6 +434,9 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         std::printf("Frame %u, %.2fs: bake %u, active %u, progress %u/%u; %s\n", frame,
                     std::chrono::duration<double>(Clock::now() - start).count(), stats.state, stats.active,
                     stats.completed, stats.probes, stats.status);
+        if (stats.structSize >= sizeof(stats) && stats.reflectionRequested)
+          std::printf("Authored reflection readiness: pending %u, active %u, failed %u\n",
+                      stats.reflectionPending, stats.reflectionActive, stats.reflectionFailed);
         std::fflush(stdout);
         lastState = stats.state;
       }
@@ -422,7 +445,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       if (stats.state == REMIXAPI_BAKE_FAILED_EXT)
         throw std::runtime_error(std::string("Camera path bake failed: ") + stats.status);
       if (!pathReady) {
-        pathWarmup = stats.active && materials.complete() ? pathWarmup + 1 : 0;
+        pathWarmup = stats.active && materials.complete() && reflectionsReady(stats, map) ? pathWarmup + 1 : 0;
         pathReady = pathWarmup >= settings.warmupFrames;
         if (pathReady) pathHash = stats.activeHash;
       } else if (!stats.active || stats.activeHash != pathHash)
@@ -452,6 +475,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       check(gpuStatistics(&timing), "GetGpuPassTimings");
       bool ready = materials.complete() && backend.activeBackend == backend.requestedBackend &&
                    (backend.activeBackend != 2 || !settings.waitForBake || stats.active);
+      if (backend.activeBackend == 2 && settings.waitForBake)
+        ready &= reflectionsReady(stats, map);
       if (backend.requestedBackend == 1) {
         if (!denoisingStatistics)
           throw std::runtime_error("Runtime lacks denoising readiness statistics");
@@ -476,6 +501,13 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
                           timing);
       if (measurement.complete()) {
         measurementEnd = frame;
+        if (profile) {
+          // Reflection-only edits publish after the diffuse bake without changing
+          // its hash. Match the final image to a fresh report, not initial bake state.
+          previousProbeReport = lastWrite(diagnostics / "probes.json");
+          std::ofstream(diagnostics / "probes.request");
+          requestedProbes = true;
+        }
         if (const char *prefix = std::getenv("REMIX_DEBUG_BAKE_CAPTURE_PREFIX")) {
           std::ofstream request(std::string(prefix) + ".frame.request");
           if (!request)
