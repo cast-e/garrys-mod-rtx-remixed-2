@@ -170,6 +170,10 @@ Preparation restarting after warmup rejects the run; a continuous preparation wa
 bounded to five minutes. An adjacent `.preparation.json` records the final readiness.
 Older runtimes without this independent export are rejected for measurement/camera paths.
 Manual fixed-frame runs remain available with a warning that preparation is unverifiable.
+For offline validation with the older 1.3.280 layer, explicitly setting
+`rtx.native.lowLatency = 0` avoids its observed Reflex external-timeline tracking warning.
+Record that scope; it does not change game defaults or establish pacing/performance acceptance.
+Use a newer validation layer to validate Reflex itself; do not suppress general sync diagnostics.
 Reflection capture failures reject the measurement. Older runtimes without the optional
 bake-statistics readiness tail cannot verify an authored sidecar and are rejected for that case.
 Camera paths use the same reflection readiness gate, and completed measurements request a fresh
