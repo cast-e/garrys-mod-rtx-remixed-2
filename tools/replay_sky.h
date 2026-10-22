@@ -7,6 +7,9 @@ namespace proxy::replay {
 // orientation. Output is sRGB; interpolation happens in linear light.
 std::vector<uint8_t> skyDome(const std::array<bsp::SkyboxFace, 6> &faces,
                              uint32_t width, uint32_t height);
+// Preserves values above one. Mixed LDR/HDR faces are filtered in linear light.
+std::vector<float> skyDomeHdr(const std::array<bsp::SkyboxFace, 6> &faces,
+                             uint32_t width, uint32_t height);
 
 class Sky {
 public:

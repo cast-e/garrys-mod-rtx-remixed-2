@@ -239,10 +239,11 @@ game-specific materials that GMod's shared content does not contain.
 
 This is a static map diagnostic, with static VMT shading and textures. Engine
 material proxies, gameplay entities, particles, game UI and the engine's sky
-rendering are absent. Static sky lighting is supported: the relay loads the map's six LDR skybox
-textures into a linear-filtered dome for rendering and baking. Procedural painted skies require a
-validated frozen live capture through `OPENREMIX_PROXY_BAKE_SKY_REFERENCE`; HDR-only sky materials
-and animated sky proxies remain unsupported and are reported explicitly.
+rendering are absent. Static sky lighting is supported: the relay loads the map's six skybox
+textures into a linear-filtered dome for rendering and baking. LDR, floating-point/integer HDR and
+single-texture RGBS HDR skies are supported. Procedural painted skies require a validated frozen
+live capture through `OPENREMIX_PROXY_BAKE_SKY_REFERENCE`. Animated sky proxies and the legacy
+three-texture HDR encoding remain unsupported and are reported explicitly.
 `replay.styledLights=1` includes authored controllable
 lights at `replay.lightStyleValue`; it does not simulate engine lightstyle animation.
 `replay.freezeAnimation=1` captures animated textures at frame zero; otherwise
@@ -258,12 +259,21 @@ altitude; substantial folds and invalid mappings retain whole-face probe fallbac
 Native overlap validation remains unchanged.
 
 
-The replay reads the BSP world's sky name and decodes six static LDR skybox faces
-through the same loose/VPK/map-pak search paths as other assets. It converts them
-to an sRGB dome with linear-light interpolation, and supplies that same environment
-to both presentation and frozen map baking. HDR-only sky materials are reported as
-unsupported rather than silently decoded as LDR. Dynamic sky material proxies and
-server sky overrides are outside this static replay.
+The replay reads the BSP world's sky name through the same loose/VPK/map-pak search paths as
+other assets. Plain LDR faces retain an sRGB dome with linear-light interpolation. HDR materials
+prefer `$hdrcompressedtexture` (linear RGB times alpha times eight), then `$hdrbasetexture`;
+the latter supports half/float RGB(A), Source's sixteen-times integer HDR scale, or sRGB LDR
+formats. HDR and colour-multiplied faces use an immutable linear float dome, preserving values
+above one for both presentation and frozen baking. This requires a runtime supporting the new
+linear float texture upload formats. VTF image resource offsets are respected for float/integer
+HDR; malformed, animated or unsupported HDR declarations are reported rather than silently
+falling back to a different sky. The legacy three-texture HDR encoding, dynamic material proxies
+and server sky overrides are outside this static replay.
+
+The HDR encoding/scaling follows Valve's published
+[sky shader](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/materialsystem/stdshaders/sky_hdr_dx9.cpp)
+and [RGBS decode](https://github.com/ValveSoftware/source-sdk-2013/blob/master/src/materialsystem/stdshaders/sky_hdr_compressed_rgbs_ps2x.fxc).
+Sky tint is applied in linear light before dome sampling; this is not engine material-proxy playback.
 
 For image-quality studies, start from `tools/replay_quality.cfg`, add a fixed camera and
 asset/mod paths, and record exposure, SSR and sky-reference settings explicitly. This uses the

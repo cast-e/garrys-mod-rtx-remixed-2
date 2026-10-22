@@ -1,6 +1,8 @@
 #include "replay_sky.h"
 #include "bake_sky_cache.h"
 #include "sky_faces.h"
+#include <remix/remix_native_ext.h>
+#include <type_traits>
 #define XXH_INLINE_ALL
 #include "xxhash.h"
 #include <algorithm>
@@ -23,20 +25,25 @@ void check(remixapi_ErrorCode code, const char *operation) {
   if (code != REMIXAPI_ERROR_CODE_SUCCESS) throw std::runtime_error(operation);
 }
 }
-std::vector<uint8_t> skyDome(const std::array<bsp::SkyboxFace, 6> &faces,
+template<typename T> std::vector<T> makeSkyDome(const std::array<bsp::SkyboxFace, 6> &faces,
                              uint32_t width, uint32_t height) {
   if (!width || !height || width > 8192 || height > 4096)
     throw std::invalid_argument("Invalid replay sky dome dimensions");
   for (const auto &face : faces)
     if (!face.width || !face.height || face.width > 8192 || face.height > 8192 ||
-        face.rgba.size() != uint64_t(face.width)*face.height*4)
+        (face.linearRgba.empty() ? face.rgba.size() : face.linearRgba.size()) !=
+            uint64_t(face.width)*face.height*4)
       throw std::invalid_argument("Incomplete replay sky faces");
+  for (const auto &face : faces)
+    for (float value : face.linearRgba)
+      if (!std::isfinite(value) || value < 0)
+        throw std::invalid_argument("Invalid linear sky radiance");
   std::array<float, 256> decode;
   for (unsigned i = 0; i < decode.size(); ++i) decode[i] = linear(float(i)/255);
   // Texture up differs from the live camera capture basis at the upper face.
   constexpr float right[6][3]{{0,-1,0},{0,1,0},{1,0,0},{-1,0,0},{0,-1,0},{0,-1,0}};
   constexpr float up[6][3]{{0,0,1},{0,0,1},{0,0,1},{0,0,1},{-1,0,0},{1,0,0}};
-  std::vector<uint8_t> output(size_t(width)*height*4);
+  std::vector<T> output(size_t(width)*height*4);
   constexpr float pi = 3.14159265358979323846f;
   for (uint32_t y = 0; y < height; ++y) {
     const float theta = (float(y)+.5f)/height*pi;
@@ -61,14 +68,25 @@ std::vector<uint8_t> skyDome(const std::array<bsp::SkyboxFace, 6> &faces,
       const float fx = px-x0, fy = py-y0;
       auto *pixel = output.data()+(size_t(y)*width+x)*4;
       for (unsigned c = 0; c < 3; ++c) {
-        auto value = [&](uint32_t tx, uint32_t ty) { return decode[face.rgba[(size_t(ty)*face.width+tx)*4+c]]; };
-        pixel[c] = srgb((value(x0,y0)*(1-fx)+value(x1,y0)*fx)*(1-fy) +
-                        (value(x0,y1)*(1-fx)+value(x1,y1)*fx)*fy);
+        auto value = [&](uint32_t tx, uint32_t ty) {
+          const size_t index = (size_t(ty)*face.width+tx)*4+c;
+          return face.linearRgba.empty() ? decode[face.rgba[index]] : face.linearRgba[index];
+        };
+        const float filtered = (value(x0,y0)*(1-fx)+value(x1,y0)*fx)*(1-fy) +
+                               (value(x0,y1)*(1-fx)+value(x1,y1)*fx)*fy;
+        if constexpr (std::is_same_v<T, float>) pixel[c] = filtered;
+        else pixel[c] = srgb(filtered);
       }
-      pixel[3] = 255;
+      pixel[3] = std::is_same_v<T, float> ? 1 : 255;
     }
   }
   return output;
+}
+std::vector<uint8_t> skyDome(const std::array<bsp::SkyboxFace, 6> &faces, uint32_t width, uint32_t height) {
+  return makeSkyDome<uint8_t>(faces, width, height);
+}
+std::vector<float> skyDomeHdr(const std::array<bsp::SkyboxFace, 6> &faces, uint32_t width, uint32_t height) {
+  return makeSkyDome<float>(faces, width, height);
 }
 Sky::~Sky() {
   if (m_light) m_api.DestroyLight(m_light);
@@ -88,6 +106,7 @@ void Sky::load(const bsp::SkyboxImages &source, const std::string &map) {
   info.width = width; info.height = height; info.depth = info.mipLevels = 1;
   info.format = REMIXAPI_FORMAT_R8G8B8A8_SRGB;
   std::vector<uint8_t> pixels;
+  std::vector<float> hdrPixels;
   const char *reference = std::getenv("OPENREMIX_PROXY_BAKE_SKY_REFERENCE");
   if (reference && *reference) {
     pixels.resize(size_t(width)*height*4);
@@ -102,13 +121,23 @@ void Sky::load(const bsp::SkyboxImages &source, const std::string &map) {
                    source.name.c_str(), source.error.c_str());
       return;
     }
-    pixels = skyDome(source.faces, width, height);
-    std::printf("Replay sky: %s, six static LDR faces; no live sky animation/material proxies\n", source.name.c_str());
+    const bool hdr = std::any_of(source.faces.begin(), source.faces.end(), [](const auto &face) {
+      return !face.linearRgba.empty();
+    });
+    if (hdr) {
+      hdrPixels = skyDomeHdr(source.faces, width, height);
+      info.format = REMIXAPI_FORMAT_R32G32B32A32_SFLOAT_EXT;
+    } else pixels = skyDome(source.faces, width, height);
+    std::printf("Replay sky: %s, six static %s faces; no live sky animation/material proxies\n",
+                 source.name.c_str(), hdr ? "linear HDR" : "LDR");
   }
-  info.hash = XXH3_64bits(pixels.data(), pixels.size()) | 1;
-  std::printf("Replay sky dome: %ux%u sRGB, scale %.6g, content %016llx\n", width, height, scale,
+  info.data = hdrPixels.empty() ? static_cast<const void *>(pixels.data()) : hdrPixels.data();
+  info.dataSize = hdrPixels.empty() ? pixels.size() : hdrPixels.size() * sizeof(float);
+  info.hash = hdrPixels.empty() ? XXH3_64bits(info.data, info.dataSize) | 1
+      : XXH3_64bits_withSeed(info.data, info.dataSize, uint32_t(info.format)) | 1;
+  std::printf("Replay sky dome: %ux%u %s, scale %.6g, content %016llx\n", width, height,
+               hdrPixels.empty() ? "sRGB" : "linear float", scale,
                static_cast<unsigned long long>(info.hash));
-  info.data = pixels.data(); info.dataSize = pixels.size();
   check(m_api.CreateTexture(&info, &m_texture), "Replay sky texture creation failed");
   wchar_t path[32]; std::swprintf(path, 32, L"0x%llx", static_cast<unsigned long long>(info.hash));
   remixapi_LightInfoDomeEXT dome{};

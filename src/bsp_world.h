@@ -49,6 +49,8 @@ bool load(const remixapi_Interface &api, const std::string &mapName, bool lightS
 struct SkyboxFace {
   uint32_t width = 0, height = 0;
   std::vector<uint8_t> rgba;
+  // HDR sky materials are decoded before interpolation; no display transform.
+  std::vector<float> linearRgba;
 };
 struct SkyboxImages {
   std::string name, error;

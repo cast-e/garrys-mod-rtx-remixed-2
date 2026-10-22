@@ -9,6 +9,7 @@
 #include "source_fs.h"
 #include "texture_categories.h"
 #include "texture_formats.h"
+#include "sky_texture.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash.h"
@@ -3118,6 +3119,52 @@ float textureLuminance(const std::string &name) {
   return value;
 }
 
+static void loadSkyFace(KeyValues &values, SkyboxFace &image) {
+  std::string error;
+  const auto &compressed = values.values["$hdrcompressedtexture"];
+  const auto &hdr = values.values["$hdrbasetexture"];
+  if (!compressed.empty()) {
+    // RGBS is linear RGB times alpha times eight, decoded before filtering.
+    if (!textureImage(compressed, image.width, image.height, image.rgba, error))
+      throw std::runtime_error(error);
+    image.linearRgba = proxy::sky::decodeRgbs(image.rgba);
+    image.rgba.clear();
+  } else if (!values.values["$hdrcompressedtexture0"].empty()) {
+    throw std::runtime_error("three-texture HDR sky encoding is unsupported");
+  } else if (!hdr.empty()) {
+    std::vector<uint8_t> file;
+    const auto path = "materials/" + lower(hdr) + ".vtf";
+    uint64_t bytes = 0;
+    if (!fs::size(path, bytes) || bytes > (64u << 20) || !fs::read(path, file, 0, bytes) || file.size() != bytes)
+      throw std::runtime_error("HDR sky texture is missing or exceeds 64 MiB");
+    uint32_t format = 0;
+    if (file.size() >= 56) std::memcpy(&format, file.data() + 52, 4);
+    if (format == 24 || format == 25 || format == 28 || format == 29)
+      image.linearRgba = proxy::sky::decodeHdrVtf(file, image.width, image.height);
+    else if (!textureImage(hdr, image.width, image.height, image.rgba, error))
+      throw std::runtime_error(error);
+  } else if (!textureImage(values.values["$basetexture"], image.width, image.height, image.rgba, error)) {
+    throw std::runtime_error(error);
+  }
+  float tint[3]{1, 1, 1};
+  if (values.values.count("$color")) {
+    if (!parseColor(values.values["$color"], tint) ||
+        std::any_of(tint, tint + 3, [](float v) { return !std::isfinite(v) || v < 0; }))
+      throw std::runtime_error("invalid sky colour multiplier");
+    if (image.linearRgba.empty()) {
+      image.linearRgba.resize(image.rgba.size(), 1);
+      for (size_t pixel = 0; pixel < image.rgba.size(); pixel += 4)
+        for (unsigned c = 0; c < 3; ++c) {
+          const float value = float(image.rgba[pixel + c]) / 255;
+          image.linearRgba[pixel + c] = value <= .04045f ? value / 12.92f : std::pow((value + .055f) / 1.055f, 2.4f);
+        }
+      image.rgba.clear();
+    }
+    for (size_t pixel = 0; pixel < image.linearRgba.size(); pixel += 4)
+      for (unsigned c = 0; c < 3; ++c) image.linearRgba[pixel + c] *= tint[c];
+  }
+}
+
 const SkyboxImages &skyboxImages() { return g_world.skyboxImages; }
 
 bool load(const remixapi_Interface &api, const std::string &requestedMap, bool lightStylesAvailable,
@@ -3211,14 +3258,16 @@ bool load(const remixapi_Interface &api, const std::string &requestedMap, bool l
     for (unsigned face = 0; face < 6 && sky.error.empty(); ++face) {
       const auto material = "skybox/" + sky.name + suffixes[face];
       KeyValues values;
-      if (!loadMaterial(material, values) || values.values["$basetexture"].empty()) {
-        sky.error = material + ": missing LDR base texture (HDR-only sky materials are not decoded)";
+      if (!loadMaterial(material, values)) {
+        sky.error = material + ": missing sky material";
         break;
       }
       auto &image = sky.faces[face];
-      std::string error;
-      if (!textureImage(values.values["$basetexture"], image.width, image.height, image.rgba, error))
-        sky.error = material + ": " + error;
+      try {
+        loadSkyFace(values, image);
+      } catch (const std::exception &failure) {
+        sky.error = material + ": " + failure.what();
+      }
     }
   }
   fs::setPakfile({});
