@@ -63,12 +63,18 @@ test('Source default content roots without optional game mounts', source_fs_test
 
 # A diagnostic map host: reads installed content without injecting into the game.
 executable('bsp-replay', 'tools/bsp_replay.cpp', 'tools/replay_settings.cpp', 'tools/replay_timing.cpp', 'tools/probe_receivers.cpp',
+  'tools/replay_sky.cpp', 'src/bake_sky_cache.cpp',
   'src/bsp_world.cpp', 'src/cubemap_overrides.cpp', 'src/source_fs.cpp', 'src/lzma_source.cpp',
   'src/texture_formats.cpp', 'src/texture_categories.cpp', 'src/pbr_rules.cpp',
   'src/material_shading.cpp', 'src/source_lights.cpp', 'src/styled_lights.cpp', 'deps/lzma/LzmaDec.c',
   include_directories: include_directories('src', remix_inc, 'deps/xxhash'),
   dependencies: [meson.get_compiler('cpp').find_library('user32'), bcrypt_dep],
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+
+replay_sky_test = executable('replay-sky-test', 'tests/replay_sky.cpp', 'tools/replay_sky.cpp', 'src/bake_sky_cache.cpp',
+  include_directories: include_directories('tools', 'src', remix_inc, 'deps/xxhash'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Replay sky dome orientation and complete face validation', replay_sky_test)
 
 replay_settings_test = executable('replay-settings-test', 'tests/replay_settings.cpp', 'tools/replay_settings.cpp',
   include_directories: include_directories('tools', remix_inc),

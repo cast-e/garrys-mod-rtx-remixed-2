@@ -44,7 +44,18 @@ float textureLuminance(const std::string &name);
 // Loads `maps/<mapName>.bsp` from the search paths; an empty name unloads.
 // Returns whether the map's world is now provided from the BSP. The host
 // enables styled lights only when it can supply current engine lightstyles.
-bool load(const remixapi_Interface &api, const std::string &mapName, bool lightStylesAvailable = false);
+bool load(const remixapi_Interface &api, const std::string &mapName, bool lightStylesAvailable = false,
+          bool decodeSkybox = false);
+struct SkyboxFace {
+  uint32_t width = 0, height = 0;
+  std::vector<uint8_t> rgba;
+};
+struct SkyboxImages {
+  std::string name, error;
+  // Source world axes: +X, -X, +Y, -Y, +Z, -Z.
+  std::array<SkyboxFace, 6> faces;
+};
+const SkyboxImages &skyboxImages();
 
 // Offline replay uses the same Source search paths and VTF decoder as the game.
 // Animated images are refused unless the diagnostic host explicitly requests

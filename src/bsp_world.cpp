@@ -816,6 +816,7 @@ struct World {
   std::map<std::array<int32_t, 6>, Group> groups;
   bool lightStylesAvailable = false;
   bool hasPlayerStart = false;
+  SkyboxImages skyboxImages;
   float playerOrigin[3] = {}, playerAngles[3] = {};
   bool skyCamera = false;
   float skyOrigin[3] = {};
@@ -928,6 +929,8 @@ void parseMapCameras(const Bsp &bsp) {
     if (!parseKeyValues("entity " + entities.substr(open, close - open + 1), kv))
       continue;
     const auto classname = lower(kv.values["classname"]);
+    if (classname == "worldspawn")
+      g_world.skyboxImages.name = kv.values["skyname"];
     if (!g_world.hasPlayerStart && (classname == "info_player_start" || classname == "info_player_deathmatch" ||
                                     classname == "gmod_player_start")) {
       g_world.hasPlayerStart = std::sscanf(kv.values["origin"].c_str(), "%f %f %f", &g_world.playerOrigin[0],
@@ -3115,7 +3118,10 @@ float textureLuminance(const std::string &name) {
   return value;
 }
 
-bool load(const remixapi_Interface &api, const std::string &requestedMap, bool lightStylesAvailable) {
+const SkyboxImages &skyboxImages() { return g_world.skyboxImages; }
+
+bool load(const remixapi_Interface &api, const std::string &requestedMap, bool lightStylesAvailable,
+          bool decodeSkybox) {
   std::string mapName = lower(requestedMap);
   if (mapName.rfind("maps/", 0) == 0)
     mapName.erase(0, 5);
@@ -3195,6 +3201,25 @@ bool load(const remixapi_Interface &api, const std::string &requestedMap, bool l
       index->transforms.push_back(t);
     }
     publishPropIndex(std::move(index));
+  }
+  if (g_active && decodeSkybox && !g_world.skyboxImages.name.empty()) {
+    // Decode while the map pakfile is mounted, just like ordinary BSP assets.
+    // Procedural painted skies need an explicit frozen live-sky reference.
+    const char *suffixes[] = {"rt", "lf", "bk", "ft", "up", "dn"};
+    auto &sky = g_world.skyboxImages;
+    if (lower(sky.name) == "painted") sky.error = "procedural painted sky requires a live-sky reference";
+    for (unsigned face = 0; face < 6 && sky.error.empty(); ++face) {
+      const auto material = "skybox/" + sky.name + suffixes[face];
+      KeyValues values;
+      if (!loadMaterial(material, values) || values.values["$basetexture"].empty()) {
+        sky.error = material + ": missing LDR base texture (HDR-only sky materials are not decoded)";
+        break;
+      }
+      auto &image = sky.faces[face];
+      std::string error;
+      if (!textureImage(values.values["$basetexture"], image.width, image.height, image.rgba, error))
+        sky.error = material + ": " + error;
+    }
   }
   fs::setPakfile({});
   if (!g_active)

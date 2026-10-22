@@ -7,6 +7,7 @@
 #include "probe_receivers.h"
 #include "replay_timing.h"
 #include "replay_host_profile.h"
+#include "replay_sky.h"
 #include <remix/remix_bake_ext.h>
 #include <cstring>
 #include <remix/remix_native_ext.h>
@@ -248,6 +249,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   if (settings.freezeAnimation)
     std::fprintf(stderr, "Diagnostic scope: animated textures frozen at frame zero; no engine playback/proxies\n");
   currentMaterials = &materials;
+  proxy::replay::Sky sky(api);
   struct SceneLifetime {
     remixapi_Interface &api;
     std::vector<remixapi_LightHandle> lights;
@@ -260,8 +262,9 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       currentMaterials = nullptr;
     }
   } scene{api, {}, {}};
-  if (!proxy::bsp::load(api, map, settings.styledLights))
+  if (!proxy::bsp::load(api, map, settings.styledLights, true))
     throw std::runtime_error("BSP load failed");
+  sky.load(proxy::bsp::skyboxImages(), map);
   std::array<float, 3> origin{}, angles{};
   if (!proxy::bsp::playerStart(origin.data(), angles.data()) && !settings.position && settings.cameraPath.empty())
     throw std::runtime_error("map has no player spawn and no replay.position override");
@@ -290,6 +293,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   camera.pNext = &params;
   auto &lights = scene.lights;
   std::vector<remixapi_LightHandle> bakeLights;
+  if (sky.light()) bakeLights.push_back(sky.light());
   std::vector<remixapi_BakeStyledLightEXT> styledLights;
   for (const auto &source : proxy::bsp::lights()) {
     const auto authored = sourceLight(source);
@@ -382,6 +386,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       else ++pathFrame;
     }
     check(api.SetupCamera(&camera), "SetupCamera");
+    if (sky.light()) check(api.DrawLightInstance(sky.light()), "Draw replay sky");
     for (auto handle : lights)
       check(api.DrawLightInstance(handle), "DrawLightInstance");
     proxy::bsp::submit(lookup);

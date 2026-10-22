@@ -239,6 +239,21 @@ altitude; substantial folds and invalid mappings retain whole-face probe fallbac
 Native overlap validation remains unchanged.
 
 
+The replay reads the BSP world's sky name and decodes six static LDR skybox faces
+through the same loose/VPK/map-pak search paths as other assets. It converts them
+to an sRGB dome with linear-light interpolation, and supplies that same environment
+to both presentation and frozen map baking. HDR-only sky materials are reported as
+unsupported rather than silently decoded as LDR. Dynamic sky material proxies and
+server sky overrides are outside this static replay.
+
+For procedural skies such as Construct's `painted`, set
+`OPENREMIX_PROXY_BAKE_SKY_REFERENCE` to an existing frozen live `.sky` capture.
+The replay validates its dimensions, format, scale and checksum, reads it without
+modifying it, and uses it for the visible and baked sky. Invalid explicit references
+fail the run. `OPENREMIX_PROXY_SKY_DOME_SCALE` defaults to 1 and must match the
+reference's recorded scale. Without a usable sky, the replay prints a lighting
+fidelity warning; the background fallback is not an in-game lighting reference.
+
 Merged 3D-skybox props are clipped by triangle against playable BSP regions,
 like the merged sky world geometry. Testing only a prop's origin cannot prevent
 a large tree card from extending into a room. Clipped base meshes retain their
