@@ -337,12 +337,15 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   unsigned pathEnd = ~0u;
   bool pathReady = false;
   std::ofstream pathTrace;
+  std::map<std::string, std::filesystem::file_time_type> pathSnapshots;
   if (!settings.cameraPath.empty()) {
     if (!statistics) throw std::runtime_error("Camera paths require bake statistics");
     auto trace = std::filesystem::path(output);
     trace.replace_extension("path.csv");
     pathTrace.open(trace);
     if (!pathTrace) throw std::runtime_error("Cannot open camera path trace");
+    pathTrace.exceptions(std::ios::failbit | std::ios::badbit);
+    pathTrace.precision(9);
     pathTrace << "pathFrame,x,y,z,screenshot\n";
   }
   const auto start = Clock::now();
@@ -368,6 +371,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         const auto target = std::filesystem::path(output);
         snapshot = (target.parent_path() / (target.stem().string() + "-path-" +
                     std::to_string(pathFrame) + ".png")).string();
+        pathSnapshots.emplace(snapshot, lastWrite(snapshot));
         check(api.RequestPresentedScreenshot(snapshot.c_str()), "Request path screenshot");
       }
       pathTrace << pathFrame << ',' << params.position.x << ',' << params.position.y << ','
@@ -483,6 +487,9 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   }
   if (!settings.cameraPath.empty() && (pathEnd == ~0u || frames <= pathEnd + 60))
     throw std::runtime_error("Replay frame budget ended before the camera path drained");
+  for (const auto &[snapshot, previous] : pathSnapshots)
+    if (lastWrite(snapshot) == previous)
+      throw std::runtime_error("Camera path produced no fresh screenshot: " + snapshot);
   if (measurement.enabled())
     measurement.write(output, map);
   if (profile && requestedProbes && lastWrite(diagnostics / "probes.json") != previousProbeReport) {
