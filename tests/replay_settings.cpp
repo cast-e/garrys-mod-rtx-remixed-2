@@ -58,6 +58,22 @@ int main() {
           "Pitch, yaw and roll retain an orthonormal camera basis");
   refuse("replay.position=1 2 3 4");
   refuse("replay.position=nan 0 0");
+  const auto pathSettings = parse("replay.cameraKey=0 0 0 0 0 350 0\n"
+                                  "replay.cameraKey=64 64 32 16 0 10 0\n");
+  const auto midpoint = proxy::replay::pathCamera(pathSettings, 32);
+  require(midpoint.position.x == 32 && midpoint.position.y == 16 && midpoint.position.z == 8 &&
+              std::abs(midpoint.forward.x - 1) < 1e-5f && std::abs(midpoint.forward.y) < 1e-5f,
+          "Camera paths interpolate positions and take the short angular route across 360 degrees");
+  require(proxy::replay::pathCamera(pathSettings, 1000).position.x == 64 &&
+              parse("").cameraPath.empty(), "Camera paths clamp at their endpoint and default off");
+  refuse("replay.cameraKey=1 0 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=0 1 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=1.5 1 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=1025 1 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=32 nan 0 0 0 0 0");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=32 1 0 0 0 0 0\nreplay.measureFrames=10");
+  refuse("replay.cameraKey=0 0 0 0 0 0 0\nreplay.cameraKey=32 1 0 0 0 0 0\nreplay.waitForBake=0");
   const auto receivers = parse("replay.probeReceiver=1 2 3 16\nreplay.probeReceiver=4 5 6 8\n");
   require(receivers.probeReceivers.size() == 2 && receivers.probeReceivers[1][3] == 8 &&
               parse("").probeReceivers.empty(),

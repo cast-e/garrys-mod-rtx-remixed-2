@@ -263,10 +263,12 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   if (!proxy::bsp::load(api, map, settings.styledLights))
     throw std::runtime_error("BSP load failed");
   std::array<float, 3> origin{}, angles{};
-  if (!proxy::bsp::playerStart(origin.data(), angles.data()) && !settings.position)
+  if (!proxy::bsp::playerStart(origin.data(), angles.data()) && !settings.position && settings.cameraPath.empty())
     throw std::runtime_error("map has no player spawn and no replay.position override");
   origin[2] += 64;
   auto params = proxy::replay::camera(settings, origin, angles);
+  if (!settings.cameraPath.empty())
+    params = proxy::replay::pathCamera(settings, 0);
   std::printf("Camera %.3f %.3f %.3f; FOV %.3f\n", params.position.x, params.position.y, params.position.z,
               params.fovYInDegrees);
   // Match the live wrapper's camera medium; otherwise an underwater replay
@@ -274,7 +276,7 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   remixapi_CameraMediumEXT medium = {};
   medium.sType = REMIXAPI_STRUCT_TYPE_CAMERA_MEDIUM_EXT;
   const float eye[] = {params.position.x, params.position.y, params.position.z};
-  float waterColor[3], waterDistance = 0;
+  float waterColor[3]{1, 1, 1}, waterDistance = 0;
   if (proxy::bsp::waterAt(eye, waterColor, waterDistance)) {
     medium.inside = 1;
     medium.transmittanceColor = {waterColor[0], waterColor[1], waterColor[2]};
@@ -330,6 +332,19 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   unsigned measurementEnd = ~0u;
   uint32_t lastState = ~0u;
   bool reportedPendingInputs = false;
+  uint32_t pathWarmup = 0, pathFrame = 0;
+  uint64_t pathHash = 0;
+  unsigned pathEnd = ~0u;
+  bool pathReady = false;
+  std::ofstream pathTrace;
+  if (!settings.cameraPath.empty()) {
+    if (!statistics) throw std::runtime_error("Camera paths require bake statistics");
+    auto trace = std::filesystem::path(output);
+    trace.replace_extension("path.csv");
+    pathTrace.open(trace);
+    if (!pathTrace) throw std::runtime_error("Cannot open camera path trace");
+    pathTrace << "pathFrame,x,y,z,screenshot\n";
+  }
   const auto start = Clock::now();
   proxy::replay::ProbeReceivers receivers(api, settings.probeReceivers);
   for (unsigned frame = 0; frame < frames; ++frame) {
@@ -338,6 +353,27 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     while (PeekMessageW(&message, window, 0, 0, PM_REMOVE)) {
       TranslateMessage(&message);
       DispatchMessageW(&message);
+    }
+    if (pathReady && pathEnd == ~0u) {
+      params = proxy::replay::pathCamera(settings, pathFrame);
+      params.pNext = &medium;
+      const float movingEye[] = {params.position.x, params.position.y, params.position.z};
+      std::fill_n(waterColor, 3, 1.f);
+      waterDistance = 0;
+      medium.inside = proxy::bsp::waterAt(movingEye, waterColor, waterDistance);
+      medium.transmittanceColor = {waterColor[0], waterColor[1], waterColor[2]};
+      medium.transmittanceMeasurementDistance = waterDistance;
+      std::string snapshot;
+      if (pathFrame % 32 == 0 || pathFrame == settings.cameraPath.back().frame) {
+        const auto target = std::filesystem::path(output);
+        snapshot = (target.parent_path() / (target.stem().string() + "-path-" +
+                    std::to_string(pathFrame) + ".png")).string();
+        check(api.RequestPresentedScreenshot(snapshot.c_str()), "Request path screenshot");
+      }
+      pathTrace << pathFrame << ',' << params.position.x << ',' << params.position.y << ','
+                << params.position.z << ',' << snapshot << '\n';
+      if (pathFrame == settings.cameraPath.back().frame) pathEnd = frame;
+      else ++pathFrame;
     }
     check(api.SetupCamera(&camera), "SetupCamera");
     for (auto handle : lights)
@@ -348,7 +384,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     // resolve also reports the actual reason, rather than hiding it behind this
     // diagnostic host's generic "waiting for retained map inputs" state.
     proxy::bsp::publishBakeScene(bakeLights, styledLights, settings.probeBounds ? &*settings.probeBounds : nullptr);
-    if (frame == frames - 3 || (measurementEnd != ~0u && frame == measurementEnd + 1))
+    if (frame == frames - 3 || (measurementEnd != ~0u && frame == measurementEnd + 1) ||
+        (pathEnd != ~0u && frame == pathEnd + 32))
       check(api.RequestPresentedScreenshot(output), "RequestPresentedScreenshot");
     check(api.Present(nullptr), "Present");
     const double hostMs = std::chrono::duration<double, std::milli>(Clock::now() - frameStart).count();
@@ -369,6 +406,17 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         std::fflush(stdout);
         lastState = stats.state;
       }
+    }
+    if (!settings.cameraPath.empty()) {
+      if (stats.state == REMIXAPI_BAKE_FAILED_EXT)
+        throw std::runtime_error(std::string("Camera path bake failed: ") + stats.status);
+      if (!pathReady) {
+        pathWarmup = stats.active && materials.complete() ? pathWarmup + 1 : 0;
+        pathReady = pathWarmup >= settings.warmupFrames;
+        if (pathReady) pathHash = stats.activeHash;
+      } else if (!stats.active || stats.activeHash != pathHash)
+        throw std::runtime_error("Bake changed during camera path");
+      if (pathEnd != ~0u && frame >= pathEnd + 60) break;
     }
     if (measurement.enabled() && !measurement.complete()) {
       remixapi_BackendCapabilitiesEXT backend{};
@@ -433,6 +481,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     else if (!measurement.enabled())
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+  if (!settings.cameraPath.empty() && (pathEnd == ~0u || frames <= pathEnd + 60))
+    throw std::runtime_error("Replay frame budget ended before the camera path drained");
   if (measurement.enabled())
     measurement.write(output, map);
   if (profile && requestedProbes && lastWrite(diagnostics / "probes.json") != previousProbeReport) {

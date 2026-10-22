@@ -1,4 +1,5 @@
 #include "replay_settings.h"
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <filesystem>
@@ -50,6 +51,16 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
         settings.position = numbers<3>(value);
       else if (key == "replay.angles")
         settings.angles = numbers<3>(value);
+      else if (key == "replay.cameraKey") {
+        const auto values = numbers<7>(value);
+        const float frame = values[0];
+        if (frame < 0 || frame > 1024 || frame != std::floor(frame) ||
+            settings.cameraPath.size() >= 64 ||
+            (settings.cameraPath.empty() ? frame != 0 : frame <= settings.cameraPath.back().frame))
+          throw std::runtime_error("Camera keys need increasing integer frames in [0,1024], starting at zero; at most 64 keys");
+        settings.cameraPath.push_back({uint32_t(frame), {values[1], values[2], values[3]},
+                                      {values[4], values[5], values[6]}});
+      }
       else if (key == "replay.probeReceiver") {
         const auto receiver = numbers<4>(value);
         if (receiver[3] <= 0 || receiver[3] > 4096 || settings.probeReceivers.size() >= 64)
@@ -115,7 +126,30 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
       throw std::runtime_error("Replay settings line " + std::to_string(number) + ": " + error.what());
     }
   }
+  if (!settings.cameraPath.empty() &&
+      (settings.cameraPath.size() < 2 || settings.measureFrames || !settings.waitForBake))
+    throw std::runtime_error("Camera paths require two or more keys, bake readiness, and no fixed-view timing window");
   return settings;
+}
+remixapi_CameraInfoParameterizedEXT pathCamera(const Settings &settings, uint32_t frame) {
+  if (settings.cameraPath.empty())
+    throw std::invalid_argument("Camera path is empty");
+  Settings view;
+  view.width = settings.width;
+  view.height = settings.height;
+  view.fov = settings.fov;
+  const auto next = std::upper_bound(settings.cameraPath.begin(), settings.cameraPath.end(), frame,
+      [](uint32_t value, const CameraKey &key) { return value < key.frame; });
+  const auto &a = next == settings.cameraPath.begin() ? *next : *(next - 1);
+  const auto &b = next == settings.cameraPath.end() ? a : *next;
+  const float t = a.frame == b.frame ? 0 : float(frame - a.frame) / float(b.frame - a.frame);
+  view.position = a.position;
+  view.angles = a.angles;
+  for (size_t axis = 0; axis < 3; ++axis) {
+    (*view.position)[axis] = a.position[axis] * (1 - t) + b.position[axis] * t;
+    (*view.angles)[axis] += t * std::remainder(b.angles[axis] - a.angles[axis], 360.f);
+  }
+  return camera(view, {}, {});
 }
 remixapi_CameraInfoParameterizedEXT camera(const Settings &settings, const std::array<float, 3> &spawnEye,
                                            const std::array<float, 3> &spawnAngles) {

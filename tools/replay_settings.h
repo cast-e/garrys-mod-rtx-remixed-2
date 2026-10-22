@@ -6,8 +6,15 @@
 #include <vector>
 
 namespace proxy::replay {
+struct CameraKey {
+  uint32_t frame;
+  std::array<float, 3> position, angles;
+};
 struct Settings {
   std::optional<std::array<float, 3>> position, angles;
+  // Repeated replay.cameraKey=frame x y z pitch yaw roll; first frame is zero.
+  // Optional deterministic motion after bake readiness and warmup; no timing mix.
+  std::vector<CameraKey> cameraPath;
   // Reference bake of a local probe domain; geometry and lights remain complete.
   std::optional<std::array<float, 6>> probeBounds;
   // Optional dynamic grey spheres: Source-world X,Y,Z,radius. Never bake inputs.
@@ -27,4 +34,5 @@ struct Settings {
 Settings configure(remixapi_Interface &api, const std::string &path);
 remixapi_CameraInfoParameterizedEXT camera(const Settings &settings, const std::array<float, 3> &spawnEye,
                                            const std::array<float, 3> &spawnAngles);
+remixapi_CameraInfoParameterizedEXT pathCamera(const Settings &settings, uint32_t frame);
 } // namespace proxy::replay

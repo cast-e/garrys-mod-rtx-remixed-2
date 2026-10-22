@@ -276,6 +276,23 @@ rtx.native.forward.bakeBatch = 1024
 ```
 
 Positions override the eye directly; angles are Source pitch/yaw/roll in degrees.
+For repeatable moving-view checks, add ordered camera keys instead:
+
+```ini
+replay.cameraKey = 0 -2300 -1600 -80 0 0 0
+replay.cameraKey = 128 -1700 -1600 -80 0 0 0
+```
+
+Each key contains a frame index, eye XYZ and pitch/yaw/roll. The first index must
+be zero; indices increase through at most 1024, with at most 64 keys. Positions
+interpolate linearly and angles take the shortest route. Motion starts after a
+completed bake, material readiness and `replay.warmupFrames` consecutive ready
+frames. A changed bake stops the run. The tool saves a numbered image every 32
+path frames and at the endpoint, a final ordinary output image, and an adjacent
+`.path.csv` trace. This bounded diagnostic is separate from fixed-view GPU
+measurements: `replay.measureFrames` must be zero and `replay.waitForBake` must
+remain enabled. It does not simulate collisions, gameplay or material proxies.
+
 For a dense local irradiance reference, set `replay.probeBounds` to six finite
 Source coordinates: minimum XYZ followed by maximum XYZ. Each maximum must be
 greater than its minimum. The replay retains the complete geometry, occluders,
