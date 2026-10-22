@@ -265,6 +265,16 @@ to both presentation and frozen map baking. HDR-only sky materials are reported 
 unsupported rather than silently decoded as LDR. Dynamic sky material proxies and
 server sky overrides are outside this static replay.
 
+For image-quality studies, start from `tools/replay_quality.cfg`, add a fixed camera and
+asset/mod paths, and record exposure, SSR and sky-reference settings explicitly. This uses the
+runtime's normal 256-sample, three-bounce transport and 32768-probe budget. A cheap smoke-test
+configuration is not a quality reference: sparse probes can leak direct sun, and one-bounce
+cubemap transport can miss indirect ceiling illumination even at higher face resolution.
+Separate transport convergence from resolution, parallax and material-response changes. Verify
+final readiness, actual probe density and completed authored captures before comparing images.
+The preset does not disable Reflex; offline validation with the older layer needs the explicit
+scope described below. Finite-sample path-traced images also require convergence checks.
+
 The final replay log includes actual tracing samples, bounces, accumulation frames,
 sample sequence and scene generation when the runtime exposes tracing statistics.
 An accumulation setting alone does not establish that a reference image converged;
