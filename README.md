@@ -371,6 +371,10 @@ forward/right/up offsets; for example `replay.probeReceiver = 64 0 -8 16` keeps 
 reflective sphere ahead of a moving camera. These are ordinary dynamic world
 instances, with world depth and shadows, excluded from the frozen static bake.
 They are diagnostic objects, not viewmodels or authored map replacements.
+`replay.receiverSegments` controls reference-sphere tessellation: an even integer in [8,256],
+default 32 longitude segments and half as many latitude rings. Use 128 for close-up lighting
+comparisons to reduce low-poly self-shadow terminator artifacts before attributing differences
+to probe reconstruction. The chosen detail is logged; the default preserves existing fixtures.
 
 For a dense local irradiance reference, set `replay.probeBounds` to six finite
 Source coordinates: minimum XYZ followed by maximum XYZ. Each maximum must be

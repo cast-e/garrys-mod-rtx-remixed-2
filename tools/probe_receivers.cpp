@@ -13,9 +13,11 @@ void check(remixapi_ErrorCode result, const char *operation) {
 }
 }
 ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::array<float, 4>> &positions,
-                               float roughness, float metallic)
+                               float roughness, float metallic, uint32_t segments)
     : api(api), positions(positions) {
   if (positions.empty()) return;
+  if (segments < 8 || segments > 256 || segments % 2)
+    throw std::runtime_error("Receiver segments must be an even integer in [8,256]");
   try {
     remixapi_MaterialInfoOpaqueEXT opaque{};
     opaque.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_OPAQUE_EXT;
@@ -29,7 +31,7 @@ ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::a
     info.pNext = &opaque;
     info.hash = 0x70726f62652d6d61ull;
     check(api.CreateMaterial(&info, &material), "Create diagnostic receiver material");
-    constexpr uint32_t rings = 16, segments = 32;
+    const uint32_t rings = segments / 2;
     constexpr float pi = 3.14159265358979323846f;
     std::vector<remixapi_HardcodedVertex> vertices;
     std::vector<uint32_t> indices;
@@ -56,11 +58,11 @@ ProbeReceivers::ProbeReceivers(remixapi_Interface &api, const std::vector<std::a
     surface.material = material;
     remixapi_MeshInfo geometry{};
     geometry.sType = REMIXAPI_STRUCT_TYPE_MESH_INFO;
-    geometry.hash = 0x70726f62652d6d65ull;
+    geometry.hash = 0x70726f62652d6d65ull ^ (uint64_t(segments ^ 32u) << 32);
     geometry.surfaces_values = &surface; geometry.surfaces_count = 1;
     check(api.CreateMesh(&geometry, &mesh), "Create diagnostic receiver sphere");
-    std::printf("Diagnostic probe receivers: %zu dynamic spheres, roughness %.3f, metallic %.3f; excluded from static bake inputs\n",
-                positions.size(), roughness, metallic);
+    std::printf("Diagnostic probe receivers: %zu dynamic spheres, roughness %.3f, metallic %.3f, %u rings x %u segments; excluded from static bake inputs\n",
+                positions.size(), roughness, metallic, rings, segments);
   } catch (...) {
     release();
     throw;

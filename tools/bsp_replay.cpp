@@ -401,7 +401,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   }
   const auto start = Clock::now();
   proxy::replay::ProbeReceivers receivers(api, settings.probeReceivers,
-                                         settings.receiverRoughness, settings.receiverMetallic);
+                                         settings.receiverRoughness, settings.receiverMetallic,
+                                         settings.receiverSegments);
   for (unsigned frame = 0; frame < frames; ++frame) {
     const auto frameStart = Clock::now();
     MSG message;

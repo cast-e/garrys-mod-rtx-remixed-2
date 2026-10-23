@@ -73,6 +73,12 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           throw std::runtime_error("Probe receivers require a radius in (0,4096] and at most 64 entries");
         settings.probeReceivers.push_back(receiver);
       }
+      else if (key == "replay.receiverSegments") {
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), settings.receiverSegments);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+            settings.receiverSegments < 8 || settings.receiverSegments > 256 || settings.receiverSegments % 2)
+          throw std::runtime_error("Receiver segments must be an even integer in [8,256]");
+      }
       else if (key == "replay.receiverRoughness" || key == "replay.receiverMetallic") {
         const float scalar = numbers<1>(value)[0];
         if (scalar < 0 || scalar > 1)

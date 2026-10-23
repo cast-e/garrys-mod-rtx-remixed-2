@@ -9,7 +9,7 @@ namespace proxy::replay {
 class ProbeReceivers {
 public:
   ProbeReceivers(remixapi_Interface &api, const std::vector<std::array<float, 4>> &positions,
-                 float roughness = 1, float metallic = 0);
+                 float roughness = 1, float metallic = 0, uint32_t segments = 32);
   ~ProbeReceivers();
   ProbeReceivers(const ProbeReceivers &) = delete;
   ProbeReceivers &operator=(const ProbeReceivers &) = delete;

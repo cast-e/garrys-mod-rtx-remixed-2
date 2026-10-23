@@ -124,6 +124,14 @@ int main() {
   refuse("replay.receiverRoughness=-.1");
   refuse("replay.receiverMetallic=1.1");
   refuse("replay.receiversFollowCamera=2");
+  require(parse("").receiverSegments == 32 && parse("replay.receiverSegments=128").receiverSegments == 128 &&
+              parse("replay.receiverSegments=8").receiverSegments == 8 &&
+              parse("replay.receiverSegments=256").receiverSegments == 256,
+          "Reference sphere detail is explicit and bounded while old fixtures retain their geometry");
+  for (const auto *value : {"7", "257", "33", "nan", "16.5", "-8", "128 extra"}) {
+    const auto text = std::string("replay.receiverSegments=") + value;
+    refuse(text.c_str());
+  }
   refuse("replay.fov=179");
   refuse("replay.unknown=1");
   require(!proxy::replay::Settings{}.freezeAnimation &&
