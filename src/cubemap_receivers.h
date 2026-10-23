@@ -9,6 +9,10 @@
 namespace proxy::cubemaps {
   using CaptureOrigin = std::array<int32_t, 3>;
 
+  inline bool supportsReceiverBindings(PFN_remixapi_GetReflectionBindingVersionEXT query) {
+    return query && query() >= REMIXAPI_REFLECTION_BINDING_VERSION_EXT;
+  }
+
   // Source's compiled $envmap value names a capture, independently of the
   // material filename. This deliberately does not invent influence or bounds.
   inline std::optional<CaptureOrigin> captureOrigin(std::string_view texture, std::string_view map) {

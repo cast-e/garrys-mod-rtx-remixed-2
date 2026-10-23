@@ -3575,6 +3575,14 @@ static bool updateCubemapReceivers() {
   }();
   bool bindingsChanged = false;
   if (bindReceivers) {
+    static const bool supported = [] {
+      const auto query = sceneFunction<PFN_remixapi_GetReflectionBindingVersionEXT>("remixapi_GetReflectionBindingVersionEXT");
+      const bool capable = cubemaps::supportsReceiverBindings(query);
+      if (!capable)
+        std::fprintf(stderr, "BSP receiver bindings disabled: runtime lacks frame-safe receiver binding support\n");
+      return capable;
+    }();
+    if (!supported) return false;
     static const auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT");
     g_cubemapOverrides.poll(publish);
     const auto revision = g_cubemapOverrides.acceptedRevision();

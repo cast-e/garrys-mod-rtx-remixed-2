@@ -425,7 +425,10 @@ capture budget (maximum 64), so a low budget cannot cover every room.
 Experimental receiver assignments: `OPENREMIX_PROXY_CUBEMAP_RECEIVER_BINDINGS=1` connects
 resolved VMT `$envmap` capture origins to exact, unique origins in an accepted authored
 sidecar. This requires a paired native runtime supporting scene-scoped material reflection
-bindings and frame-snapshotted binding-only updates. It is off by default. Opaque imported
+bindings and frame-snapshotted binding-only updates. The adapter requires
+`remixapi_GetReflectionBindingVersionEXT` to report version 1 or newer; absent/older
+contracts disable explicit bindings with a diagnostic while preserving ordinary volume
+selection. This query does not establish hardware or capture readiness. The feature is off by default. Opaque imported
 materials use stable VMT-specific variants even when they share a base texture; changing a
 volume ID or removing the sidecar updates receiver metadata without replacing their meshes
 or diffuse bake inputs. Existing masks, PBR conversion and replacement keys stay in the

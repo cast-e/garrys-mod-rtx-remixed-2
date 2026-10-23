@@ -5,8 +5,16 @@
 using namespace proxy::cubemaps;
 namespace {
   void require(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
+  uint32_t reportedVersion = 0;
+  uint32_t REMIXAPI_CALL version() { return reportedVersion; }
 }
 int main() try {
+  require(!supportsReceiverBindings(nullptr) && !supportsReceiverBindings(version),
+          "Missing and unsupported runtime contracts cannot silently activate receiver bindings");
+  reportedVersion = REMIXAPI_REFLECTION_BINDING_VERSION_EXT;
+  require(supportsReceiverBindings(version), "Current frame-safe binding contract is accepted");
+  ++reportedVersion;
+  require(supportsReceiverBindings(version), "Compatible future binding contracts remain accepted");
   const auto origin = captureOrigin("MAPS\\BM_C1A1B\\c-1160_3124_384", "bm_c1a1b");
   require(origin && *origin == CaptureOrigin{-1160, 3124, 384}, "Explicit capture names retain signed coordinates");
   require(captureOrigin("maps//test/c0_0_0", "TEST") == CaptureOrigin{0, 0, 0},
