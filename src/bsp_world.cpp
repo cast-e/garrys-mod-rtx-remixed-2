@@ -792,6 +792,7 @@ struct CullStatistics {
 // mip, played through one dynamic texture at its AnimatedTexture rate.
 struct WaterNormal {
   std::string name;
+  float requestedFps = 0; // cache identity, including failed/static loads
   uint32_t width = 0, height = 0;
   std::vector<std::vector<uint8_t>> frames; // RGBA8 (kept only when animated)
   float fps = 0;
@@ -1331,14 +1332,18 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
 }
 
 // The texture of a water material's $normalmap (nullptr: none), made once per
-// name. fps: its AnimatedTexture rate (0: the first frame only, as Source
+// name and playback rate. fps: its AnimatedTexture rate (0: the first frame only, as Source
 // shows a $bumpframe nothing animates).
 WaterNormal *waterNormal(const std::string &name, float fps) {
+  // Nonpositive/invalid rates retain the existing nonanimated policy. Distinct
+  // positive rates need distinct runtime textures: uploads mutate the texture.
+  const float rate = std::isfinite(fps) && fps > 0 ? fps : 0;
   for (auto &known : g_world.waterNormals)
-    if (known->name == name)
+    if (known->name == name && known->requestedFps == rate)
       return known->texture ? known.get() : nullptr;
   auto normal = std::make_unique<WaterNormal>();
   normal->name = name;
+  normal->requestedFps = rate;
   WaterNormal *made = normal.get();
   g_world.waterNormals.push_back(std::move(normal));
   std::vector<std::vector<uint8_t>> frames;
@@ -1347,8 +1352,10 @@ WaterNormal *waterNormal(const std::string &name, float fps) {
     g_world.waterNormalFailure = name + ": " + (failure ? failure : "no frames");
     return nullptr;
   }
-  const bool animated = frames.size() > 1 && fps > 0;
+  const bool animated = frames.size() > 1 && rate > 0;
   made->hash = XXH3_64bits_withSeed(name.data(), name.size(), 0x77617465726e726dull) | 1;
+  if (rate > 0)
+    made->hash = XXH3_64bits_withSeed(&rate, sizeof(rate), made->hash) | 1;
   remixapi_TextureInfoDynamicEXT dynamic = {};
   dynamic.sType = REMIXAPI_STRUCT_TYPE_TEXTURE_DYNAMIC_EXT;
   dynamic.dynamic = 1;
@@ -1373,7 +1380,7 @@ WaterNormal *waterNormal(const std::string &name, float fps) {
   }
   ++g_world.waterNormalCount;
   if (animated) {
-    made->fps = fps;
+    made->fps = rate;
     made->frames = std::move(frames);
     ++g_world.waterAnimated;
   }
