@@ -4,6 +4,7 @@
 #include "bsp_world.h"
 #include "bake_charts.h"
 #include "bake_materials.h"
+#include "refract_native.h"
 
 #include "lzma_source.h"
 #include "source_fs.h"
@@ -675,6 +676,8 @@ struct Material {
   float opacity = 1;
   bool noCull = false; // $nocull: Source draws both sides
   bool owned = false; // ref.handle created here (water)
+  bool requiresOwned = false; // optical imports cannot fall back to opaque texture lookup
+  std::string importFailure;
   // Water: a translucent body of this colour (linear) and measurement
   // distance (remixapi_CameraMediumEXT when the camera is in it).
   bool waterBody = false;
@@ -804,6 +807,7 @@ struct WaterNormal {
 struct World {
   const remixapi_Interface *api = nullptr;
   std::vector<std::unique_ptr<WaterNormal>> waterNormals; // by water material, shared by name
+  std::vector<remixapi_TextureHandle> opticalTints;
   std::string map;
   std::vector<Material> materials;
   std::vector<uint32_t> bakeMaterials;
@@ -1411,6 +1415,115 @@ void animateWaterNormals() {
 // for the map's own faces, which rtx.conf does not remove (its ignore list
 // was made for dxvk-remix and holds world textures; the faces would leave
 // holes in the map).
+void loadRefract(const KeyValues &kv, const std::string &identity, Material &material) {
+  material.requiresOwned = true;
+  refract::Description description;
+  const auto proxies = kv.blocks.find("proxies");
+  if (!refract::describe(kv.values, proxies == kv.blocks.end() ? refract::Values{} : proxies->second,
+                         description, material.importFailure))
+    return;
+  material.noCull = description.noCull;
+  if (!g_world.api) {
+    material.importFailure = "Refract runtime unavailable";
+    return;
+  }
+  auto frameCount = [&](const std::string &name, uint32_t &count) {
+    if (name.empty())
+      return true;
+    std::vector<uint8_t> header;
+    if (!fs::read(texturePath(name), header, 0, 64) || header.size() < 64 ||
+        std::memcmp(header.data(), "VTF", 4)) {
+      material.importFailure = "Refract texture header unavailable: " + name;
+      return false;
+    }
+    uint16_t frames = 0;
+    uint32_t flags = 0;
+    std::memcpy(&frames, header.data() + 24, sizeof(frames));
+    std::memcpy(&flags, header.data() + 20, sizeof(flags));
+    if (flags & 0x4000) {
+      material.importFailure = "Refract requires a 2D texture: " + name;
+      return false;
+    }
+    count = std::max<uint32_t>(frames, 1);
+    return true;
+  };
+  refract::Resources resources;
+  resources.hash = XXH3_64bits_withSeed(identity.data(), identity.size(), 0x7265667261637431ull) | 1;
+  if (!frameCount(description.normalTexture, resources.normalFrames) ||
+      !frameCount(description.animatedTexture, resources.proxyFrames) ||
+      !frameCount(description.tintTexture, resources.tintFrames))
+    return;
+  if (resources.tintFrames != 1 || (!description.animatedTexture.empty() &&
+      resources.normalFrames != resources.proxyFrames)) {
+    material.importFailure = "Refract animation frame counts are unsupported";
+    return;
+  }
+  wchar_t normalPath[32]{}, tintPath[32]{};
+  if (!description.normalTexture.empty()) {
+    auto *normal = waterNormal(description.normalTexture, description.framesPerSecond);
+    if (!normal) {
+      material.importFailure = "Refract normal unavailable: " + g_world.waterNormalFailure;
+      return;
+    }
+    swprintf(normalPath, 32, L"0x%llX", static_cast<unsigned long long>(normal->hash));
+    resources.normal = normalPath;
+  }
+  remixapi_TextureHandle tint = nullptr;
+  if (!description.tintTexture.empty()) {
+    uint32_t width = 0, height = 0;
+    std::vector<std::vector<uint8_t>> frames;
+    const char *failure = vtfFrames(description.tintTexture, width, height, frames);
+    std::vector<float> pixels;
+    if (failure || frames.size() != 1 || !refract::passiveTint(frames[0], description.tint, pixels)) {
+      material.importFailure = "Refract tint conversion failed: " + description.tintTexture;
+      return;
+    }
+    remixapi_TextureInfo info{};
+    info.sType = REMIXAPI_STRUCT_TYPE_TEXTURE_INFO;
+    info.hash = XXH3_64bits_withSeed(pixels.data(), pixels.size() * sizeof(float), resources.hash) | 1;
+    info.width = width;
+    info.height = height;
+    info.depth = info.mipLevels = 1;
+    info.format = REMIXAPI_FORMAT_R32G32B32A32_SFLOAT_EXT;
+    info.data = pixels.data();
+    info.dataSize = pixels.size() * sizeof(float);
+    if (g_world.api->CreateTexture(&info, &tint) != REMIXAPI_ERROR_CODE_SUCCESS) {
+      material.importFailure = "Runtime rejected Refract tint texture";
+      return;
+    }
+    swprintf(tintPath, 32, L"0x%llX", static_cast<unsigned long long>(info.hash));
+    resources.tint = tintPath;
+  }
+  std::vector<uint64_t> keys;
+  for (const auto &name : {description.normalTexture, description.tintTexture}) {
+    if (name.empty())
+      continue;
+    for (const bool engine : {false, true})
+      for (const bool legacy : {false, true})
+        for (auto key : textureHashes(texturePath(name), engine, legacy))
+          if (key && keys.size() < 32 && std::find(keys.begin(), keys.end(), key) == keys.end())
+            keys.push_back(key);
+  }
+  remixapi_MaterialInfoReplacementHashEXT primary{};
+  primary.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO_REPLACEMENT_HASH_EXT;
+  primary.materialHash = keys.empty() ? 0 : keys.front();
+  remixapi_MaterialReplacementKeysEXT alternates{};
+  alternates.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_REPLACEMENT_KEYS_EXT;
+  alternates.pNext = &primary;
+  alternates.count = uint32_t(keys.size());
+  alternates.keys = keys.data();
+  resources.replacementChain = keys.empty() ? nullptr : &alternates;
+  const auto status = refract::create(g_world.api->CreateMaterial, description, resources,
+                                     material.ref.handle, material.importFailure);
+  if (status == REMIXAPI_ERROR_CODE_SUCCESS) {
+    material.resolved = material.owned = true;
+    if (tint)
+      g_world.opticalTints.push_back(tint);
+  } else if (tint) {
+    g_world.api->DestroyTexture(tint);
+  }
+}
+
 int materialByName(const std::string &name, bool brush) {
   const std::string key = lower(name);
   const std::string cacheKey = brush ? "\x01" + key : key;
@@ -1421,7 +1534,13 @@ int materialByName(const std::string &name, bool brush) {
   Material m;
   m.name = name;
   KeyValues kv;
-  if (loadMaterial(m.name, kv) && kv.shader == "water") {
+  if (loadMaterial(m.name, kv) && kv.shader == "refract") {
+    loadRefract(kv, cacheKey, m);
+    slot = int(g_world.materials.size());
+    g_world.materials.push_back(std::move(m));
+    return slot;
+  }
+  if (kv.shader == "water") {
     // Water: Source draws it from render targets (refraction, reflection),
     // which have no counterpart here. A translucent body (the runtime's thick
     // translucent material): Fresnel reflection, and below the surface the
@@ -1762,6 +1881,10 @@ void destroyMeshes() {
     if (normal->texture && g_world.api)
       g_world.api->DestroyTexture(normal->texture);
   g_world.waterNormals.clear();
+  for (auto tint : g_world.opticalTints)
+    if (g_world.api)
+      g_world.api->DestroyTexture(tint);
+  g_world.opticalTints.clear();
   for (auto &[key, group] : g_world.overlayGroups)
     if (group.mesh && g_world.api)
       g_world.api->DestroyMesh(group.mesh);
@@ -3443,7 +3566,7 @@ void submit(MaterialLookup lookup) {
   // load, as a rule): every frame at first, then twice a second.
   if (frame < 600 || frame % 30 == 0)
     for (auto &m : g_world.materials) {
-      if (m.resolved)
+      if (m.resolved || m.requiresOwned)
         continue;
       // A mask the engine never uploads (a format the proxy does not take)
       // must not keep the surface untextured: lit after ten seconds.
@@ -4150,7 +4273,8 @@ void dumpStatistics(FILE *out) {
     fprintf(out, "     prop model left to the engine: %s\n", path.c_str());
   for (auto &m : g_world.materials)
     if (!m.resolved)
-      fprintf(out, "     unresolved material %s (%zu texture hashes)\n", m.name.c_str(), m.candidates.size());
+      fprintf(out, "     unresolved material %s (%zu texture hashes): %s\n", m.name.c_str(), m.candidates.size(),
+              m.importFailure.c_str());
 }
 
 } // namespace proxy::bsp

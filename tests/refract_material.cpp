@@ -49,6 +49,7 @@ int main() {
                    {"$refracttinttexture", "models/effects/com_shield001a"},
                    {"$refractamount", ".05"}, {"$bumpframe", "0"}, {"$nocull", "1"}};
   Values proxies = {{"texturescroll.texturescrollvar", "$bumptransform"},
+                    {"texturescroll", ""}, {"animatedtexture", ""},
                     {"texturescroll.texturescrollrate", ".2"},
                     {"texturescroll.texturescrollangle", "80"},
                     {"animatedtexture.animatedtexturevar", "$dudvmap"},

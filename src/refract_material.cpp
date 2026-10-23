@@ -87,6 +87,9 @@ bool describe(const Values &values, const Values &proxies, Description &output, 
       return fail(key);
   }
   for (const auto &entry : proxies) {
+    // KeyValues retains an empty marker for each nested proxy block.
+    if ((entry.first == "animatedtexture" || entry.first == "texturescroll") && entry.second.empty())
+      continue;
     if (entry.first != "texturescroll.texturescrollvar" &&
         entry.first != "texturescroll.texturescrollrate" &&
         entry.first != "texturescroll.texturescrollangle" &&
