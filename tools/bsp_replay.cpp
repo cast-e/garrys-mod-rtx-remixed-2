@@ -379,6 +379,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   const std::filesystem::path diagnostics =
       profile ? std::filesystem::path(profile) : std::filesystem::path();
   proxy::replay::FreshReport probeReport(diagnostics / "probes.json", diagnostics / "probes.request");
+  proxy::replay::FreshReport pipelineReport(diagnostics / "pipelines.txt", diagnostics / "pipelines.request");
+  bool requestedPipelines = false;
   bool requestedProbes = false;
   bool requestedPathReport = false;
   unsigned measurementEnd = ~0u;
@@ -555,6 +557,8 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
           // its hash. Match the final image to a fresh report, not initial bake state.
           probeReport.request();
           requestedProbes = true;
+          pipelineReport.request();
+          requestedPipelines = true;
         }
         if (const char *prefix = std::getenv("REMIX_DEBUG_BAKE_CAPTURE_PREFIX")) {
           std::ofstream request(std::string(prefix) + ".frame.request");
@@ -572,10 +576,11 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
       // as well as the screenshot, without including either in measurements.
       const bool pendingProbes = profile && requestedProbes &&
                                  !probeReport.ready();
-      if (!pendingProbes)
+      const bool pendingPipelines = requestedPipelines && !pipelineReport.ready();
+      if (!pendingProbes && !pendingPipelines)
         break;
       if (frame - measurementEnd >= 60)
-        throw std::runtime_error("Published reflection probe report did not arrive within 60 presents");
+        throw std::runtime_error("Requested runtime diagnostic reports did not arrive within 60 presents");
     }
     // Restrict the diagnostic delay to the asynchronous CPU/CUDA filtering
     // stage. Transport scheduling and the finished-lighting timing window keep
@@ -625,6 +630,13 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
     std::filesystem::copy_file(diagnostics / "probes.json", report,
                                std::filesystem::copy_options::overwrite_existing);
     std::printf("Published reflection probe report: %s\n", report.string().c_str());
+  }
+  if (requestedPipelines && pipelineReport.ready()) {
+    auto report = std::filesystem::path(output);
+    report.replace_extension(".pipelines.txt");
+    std::filesystem::copy_file(diagnostics / "pipelines.txt", report,
+                               std::filesystem::copy_options::overwrite_existing);
+    std::printf("Published pipeline timing report: %s\n", report.string().c_str());
   }
   proxy::bsp::dumpStatistics(stdout);
   if (!settings.mods.empty()) {
