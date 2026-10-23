@@ -84,6 +84,10 @@ replay_timing_test = executable('replay-timing-test', 'tests/replay_timing.cpp',
   include_directories: include_directories('tools', remix_inc),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('Replay steady-state GPU timing window', replay_timing_test)
+replay_report_test = executable('replay-report-test', 'tests/replay_report.cpp',
+  include_directories: include_directories('tools'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Replay diagnostics require a fresh nonempty response', replay_report_test)
 
 shader_bytecode_test = executable('shader-bytecode-test', 'tests/shader_bytecode.cpp',
   include_directories: include_directories('src'),
