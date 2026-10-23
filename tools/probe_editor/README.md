@@ -133,3 +133,21 @@ Native rendering and drag integration (opens and closes its own test window; out
 ```powershell
 python tests/probe_editor_desktop.py --bsp "D:/maps/example.bsp" --game "D:/games/GarrysMod" --report-dir "_work/reports/editor-check"
 ```
+
+### BSP projection reference extraction
+
+From the `tools` directory, run:
+
+```powershell
+python -m probe_editor.bsp_reflections "D:\maps\bm_c1a1b.bsp" --output "reference.json"
+```
+
+This reads the bounded entity lump (including supported Source LZMA compression), fingerprints the
+complete BSP and selects only `env_cubemap` entities with explicit `parallax=1`. The reference keeps
+capture origins, raw box offsets, source angles and optional Hammer side assignments. It preserves
+outside-box capture points as reference facts rather than silently moving or dropping them.
+
+The output is a reference corpus, not an authoring document or runtime sidecar. Projection offsets
+still need their coordinate/rotation convention checked against the source renderer. Hammer side IDs
+are not compiled BSP face indices, and neither influence bounds nor overlap priorities can be inferred
+from these fields alone. The extractor deliberately leaves those policies unspecified.
