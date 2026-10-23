@@ -151,3 +151,14 @@ The output is a reference corpus, not an authoring document or runtime sidecar. 
 still need their coordinate/rotation convention checked against the source renderer. Hammer side IDs
 are not compiled BSP face indices, and neither influence bounds nor overlap priorities can be inferred
 from these fields alone. The extractor deliberately leaves those policies unspecified.
+
+Add `--compiled-receivers` to include actual compiled face-to-material assignments. Add
+`--capture-assignments` to also inspect packed material patches for explicit capture-texture links
+(this includes compiled receivers automatically). The latter recognizes bounded compiler-style
+quoted `patch` / `include` / `replace` scalar blocks, including extra replacements such as crack
+materials. It does not resolve general VMT inheritance, conditions or proxies. Each receiver material
+gets a status: missing packed material, unsupported form, nonlocal capture, ordinary capture without
+an authored projection, unique authored projection, or ambiguous projection origins. Duplicate packed
+material names and exceeded read budgets reject extraction. No association is guessed from a material
+filename. Compiled indices remain scoped to the fingerprinted BSP; these links do not define dynamic
+receiver influence or reflection blending.

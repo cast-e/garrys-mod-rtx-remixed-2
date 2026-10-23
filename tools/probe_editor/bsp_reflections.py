@@ -111,14 +111,20 @@ def main():
     parser.add_argument('--output', type=Path, help='Reference JSON destination; defaults to standard output')
     parser.add_argument('--compiled-receivers', action='store_true',
                         help='Include compiled face/material assignments (not Hammer side IDs)')
+    parser.add_argument('--capture-assignments', action='store_true',
+                        help='Include explicit packed material capture links and compiled receivers')
     args = parser.parse_args()
     from probe_bounds import Bsp
     from .storage import atomic_write
     bsp = Bsp(args.bsp)
     result = reference(bsp.lump(0), args.bsp.stem, hashlib.sha256(bsp.data).hexdigest())
-    if args.compiled_receivers:
+    if args.compiled_receivers or args.capture_assignments:
         from .bsp_receivers import material_receivers
         result['compiledMaterialReceivers'] = material_receivers(bsp)
+    if args.capture_assignments:
+        from .bsp_captures import capture_assignments
+        result['compiledCaptureAssignments'] = capture_assignments(
+            bsp, result['compiledMaterialReceivers'], args.bsp.stem, result['volumes'])
     payload = (json.dumps(result, indent=2, allow_nan=False) + '\n').encode('utf-8')
     if args.output:
         atomic_write(args.output, payload)

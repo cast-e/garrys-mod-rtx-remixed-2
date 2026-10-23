@@ -1,5 +1,6 @@
 """Authored projection references preserve source semantics and reject partial data."""
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -8,12 +9,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parents[1] / 'tools'
 sys.path.insert(0, str(TOOLS))
 from probe_editor.bsp_reflections import entities, reference
 from probe_editor.bsp_receivers import material_receivers
+from probe_editor.bsp_captures import capture_assignments
 
 HASH = 'a' * 64
 CUBE = b'{ "classname" "env_cubemap" "parallax" "1" "origin" "10 20 30" "boxmin" "-2 -3 -4" "boxmax" "5 6 7" "hammerid" "77" "sides" "128912 229012" }'
@@ -54,6 +57,65 @@ class CompiledReceivers(unittest.TestCase):
         lumps[43] = b'unterminated'
         with self.assertRaises(ValueError):
             self.read(lumps)
+
+
+class CompiledCaptureAssignments(unittest.TestCase):
+    patch = b'"patch" { "include" "materials/base.vmt" "replace" { "$envmap" "maps/test/c10_20_30" } }'
+    receivers = [dict(material='maps/test/material_999_888_777', compiledFaceIndices=[0, 2])]
+    volumes = [dict(capture=[10, 20, 30], entityIndex=7)]
+
+    def read(self, entries, volumes=None):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, contents in entries:
+                archive.writestr(name, contents)
+        class Bsp:
+            def lump(self, index):
+                assert index == 40
+                return stream.getvalue()
+        return capture_assignments(Bsp(), self.receivers, 'test',
+                                   self.volumes if volumes is None else volumes)[0]
+
+    def entries(self, payload=None):
+        return [('materials/maps/test/material_999_888_777.vmt', self.patch if payload is None else payload)]
+
+    def test_explicit_texture_wins_over_misleading_material_suffix(self):
+        result = self.read(self.entries())
+        self.assertEqual(result['capture'], [10, 20, 30])
+        self.assertEqual(result['projectionEntityIndices'], [7])
+        self.assertEqual(result['status'], 'authored-projection')
+        self.assertNotIn('influenceMinimum', result)
+
+    def test_other_scalar_replacements_preserve_capture_assignment(self):
+        payload = self.patch.replace(b'"$envmap"', b'"$crackmaterial" "maps/test/glass_b" "$envmap"')
+        self.assertEqual(self.read(self.entries(payload))['projectionEntityIndices'], [7])
+
+    def test_missing_unsupported_and_nonlocal_are_reported(self):
+        self.assertEqual(self.read([])['status'], 'no-packed-material')
+        for payload in (self.patch.replace(b'"replace"', b'"insert"'),
+                        self.patch.replace(b'"$envmap"', b'"$envmap" "other" "$envmap"'),
+                        self.patch + b' trailing', b'"VertexLitGeneric" { "$envmap" "env_cubemap" }'):
+            result = self.read(self.entries(payload))
+            self.assertEqual(result['status'], 'unsupported-material-form')
+            self.assertNotIn('capture', result)
+        result = self.read(self.entries(self.patch.replace(b'maps/test/', b'maps/other/')))
+        self.assertEqual(result['status'], 'nonlocal-capture-texture')
+
+    def test_unmatched_and_duplicate_origins_do_not_choose_projection(self):
+        self.assertEqual(self.read(self.entries(), [])['status'], 'capture-without-authored-projection')
+        result = self.read(self.entries(), self.volumes + [dict(capture=[10, 20, 30], entityIndex=9)])
+        self.assertEqual(result['status'], 'ambiguous-projection')
+        self.assertEqual(result['projectionEntityIndices'], [7, 9])
+
+    def test_duplicate_paths_traversal_and_read_budgets_reject(self):
+        entries = self.entries()
+        for extra in [('MATERIALS/maps/test/material_999_888_777.VMT', self.patch),
+                      ('materials/../escape.vmt', self.patch)]:
+            with self.assertRaises(ValueError):
+                self.read(entries + [extra])
+        for name in ('MAX_PATCH_BYTES', 'MAX_TOTAL_BYTES', 'MAX_ARCHIVE_ENTRIES'):
+            with patch('probe_editor.bsp_captures.' + name, 0), self.assertRaises(ValueError):
+                self.read(entries)
 
 
 class BspReflectionReference(unittest.TestCase):
@@ -122,12 +184,13 @@ class BspReflectionReference(unittest.TestCase):
             path.write_bytes(data)
             env = dict(os.environ, PYTHONPATH=str(TOOLS))
             subprocess.run([sys.executable, '-m', 'probe_editor.bsp_reflections', str(path),
-                            '--compiled-receivers', '--output', str(output)],
+                            '--capture-assignments', '--output', str(output)],
                            env=env, check=True, capture_output=True)
             report = json.loads(output.read_text())
             self.assertEqual(report['mapSha256'], hashlib.sha256(data).hexdigest())
             self.assertEqual(len(report['volumes']), 1)
             self.assertEqual(report['compiledMaterialReceivers'], [])
+            self.assertEqual(report['compiledCaptureAssignments'], [])
 
 
 if __name__ == '__main__':
