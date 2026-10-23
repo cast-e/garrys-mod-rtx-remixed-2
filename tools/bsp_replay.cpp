@@ -536,6 +536,10 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         check(denoisingStatistics(&denoising), "GetDenoisingStatistics");
         ready &= denoising.activeDenoiser == denoising.requestedDenoiser &&
                  denoising.activeTaa == denoising.requestedTaa;
+        if (!ready && frame % 120 == 0)
+          std::printf("Temporal readiness: denoiser active %u / requested %u, TAA active %u / requested %u\n",
+                      unsigned(denoising.activeDenoiser), unsigned(denoising.requestedDenoiser),
+                      unsigned(denoising.activeTaa), unsigned(denoising.requestedTaa));
       }
       if (!ready && frame % 120 == 0)
         std::printf("Measurement waiting: backend %u requested %u; %s\n", backend.activeBackend,
