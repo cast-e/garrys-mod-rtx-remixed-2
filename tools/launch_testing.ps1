@@ -5,6 +5,8 @@ $env:REMIX_CONFIG_DIR = Join-Path $root 'runtime-config'
 $env:REMIX_BAKE_CACHE_DIR = Join-Path $root 'bake-cache'
 $env:OPENREMIX_PROXY_CONTENT_ROOT = $root
 $env:OPENREMIX_PROXY_BACKEND = 'forwardplus'
+# Authored cubemaps override locally; preserve automatic captures elsewhere.
+$env:OPENREMIX_PROXY_CONFIG = ((([string]$env:OPENREMIX_PROXY_CONFIG).TrimEnd(';') + ';rtx.native.forward.authoredReflectionFallback=1').TrimStart(';'))
 $env:OPENREMIX_PROXY_MODS = Join-Path $root 'rtx-remix/mods'
 # Use the packaged dependencies even when launched from a developer shell.
 $cleanPath = $env:PATH -split ';' | Where-Object {
