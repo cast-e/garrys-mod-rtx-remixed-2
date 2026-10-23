@@ -109,11 +109,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bsp', type=Path)
     parser.add_argument('--output', type=Path, help='Reference JSON destination; defaults to standard output')
+    parser.add_argument('--compiled-receivers', action='store_true',
+                        help='Include compiled face/material assignments (not Hammer side IDs)')
     args = parser.parse_args()
     from probe_bounds import Bsp
     from .storage import atomic_write
     bsp = Bsp(args.bsp)
     result = reference(bsp.lump(0), args.bsp.stem, hashlib.sha256(bsp.data).hexdigest())
+    if args.compiled_receivers:
+        from .bsp_receivers import material_receivers
+        result['compiledMaterialReceivers'] = material_receivers(bsp)
     payload = (json.dumps(result, indent=2, allow_nan=False) + '\n').encode('utf-8')
     if args.output:
         atomic_write(args.output, payload)
