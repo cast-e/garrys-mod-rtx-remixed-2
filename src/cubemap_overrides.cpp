@@ -7,6 +7,7 @@
 
 namespace proxy::cubemaps {
   static_assert(sizeof(remixapi_ReflectionVolumeEXT) == 96);
+  static_assert(sizeof(remixapi_ReflectionSamplingEXT) == 28);
   Fingerprint fingerprint(const std::vector<uint8_t> & bytes) {
     struct Hash {
       BCRYPT_ALG_HANDLE algorithm{};
@@ -25,17 +26,26 @@ namespace proxy::cubemaps {
     check(BCryptFinishHash(state.hash, result.data(), ULONG(result.size()), 0));
     return result;
   }
-  std::vector<remixapi_ReflectionVolumeEXT> decode(const std::vector<uint8_t> & bytes, const Fingerprint &map) {
+  Document decode(const std::vector<uint8_t> & bytes, const Fingerprint &map) {
     constexpr size_t header = 44;
-    if (bytes.size() < header || std::memcmp(bytes.data(), "BSPCUBE1", 8) ||
+    const bool extended = bytes.size() >= header && !std::memcmp(bytes.data(), "BSPCUBE2", 8);
+    if (bytes.size() < header || (!extended && std::memcmp(bytes.data(), "BSPCUBE1", 8)) ||
         std::memcmp(bytes.data()+8, map.data(), map.size()))
       throw std::runtime_error("Cubemap bounds belong to another BSP or have an invalid header");
     uint32_t count;
     std::memcpy(&count, bytes.data()+40, sizeof(count));
-    if (count > REMIXAPI_REFLECTION_VOLUMES_MAX_EXT || bytes.size() != header + size_t(count)*96)
+    const size_t stride = sizeof(remixapi_ReflectionVolumeEXT) + (extended ? sizeof(remixapi_ReflectionSamplingEXT) : 0);
+    if (count > REMIXAPI_REFLECTION_VOLUMES_MAX_EXT || bytes.size() != header + size_t(count)*stride)
       throw std::runtime_error("Invalid cubemap bounds count or payload size");
-    std::vector<remixapi_ReflectionVolumeEXT> result(count);
-    if (count) std::memcpy(result.data(), bytes.data()+header, size_t(count)*96);
+    Document result;
+    result.independentSampling = extended;
+    result.volumes.resize(count);
+    if (extended) result.sampling.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+      const auto record = bytes.data() + header + size_t(i)*stride;
+      std::memcpy(&result.volumes[i], record, sizeof(result.volumes[i]));
+      if (extended) std::memcpy(&result.sampling[i], record + sizeof(result.volumes[i]), sizeof(result.sampling[i]));
+    }
     return result; // Native API validates IDs, finite rigid frames, bounds and origins atomically.
   }
   void Watcher::configure(const std::vector<uint8_t> & map, uint64_t sceneId, std::filesystem::path file) {
@@ -70,17 +80,24 @@ namespace proxy::cubemaps {
       if (input.handle == INVALID_HANDLE_VALUE) throw std::runtime_error("Cannot open cubemap sidecar");
       LARGE_INTEGER length{};
       if (!GetFileSizeEx(input.handle, &length) || length.QuadPart < 0 ||
-          length.QuadPart > 44 + 96*REMIXAPI_REFLECTION_VOLUMES_MAX_EXT)
+          length.QuadPart > 44 + 124*REMIXAPI_REFLECTION_VOLUMES_MAX_EXT)
         throw std::runtime_error("Cubemap sidecar exceeds runtime capacity");
       std::vector<uint8_t> bytes(static_cast<size_t>(length.QuadPart));
       DWORD read = 0;
       if (!ReadFile(input.handle, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size())
         throw std::runtime_error("Incomplete cubemap sidecar read");
       if (bytes == m_seen) return;
-      const auto volumes = decode(bytes, m_map);
+      const auto document = decode(bytes, m_map);
+      const auto &volumes = document.volumes;
       const remixapi_ReflectionVolumesInfoEXT request{sizeof(request), REMIXAPI_REFLECTION_VOLUMES_VERSION_EXT,
           m_scene, ++m_revision, uint32_t(volumes.size()), 0, volumes.data()};
-      const auto result = publish(&request);
+      auto result = REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
+      if (document.independentSampling) {
+        remixapi_ReflectionVolumesSamplingInfoEXT extended{request, document.sampling.data()};
+        extended.base.structSize = sizeof(extended);
+        extended.base.version = REMIXAPI_REFLECTION_VOLUMES_SAMPLING_VERSION_EXT;
+        result = publish(&extended.base);
+      } else result = publish(&request);
       if (result != REMIXAPI_ERROR_CODE_SUCCESS) throw std::runtime_error("Native renderer refused cubemap bounds");
       // Remember only accepted payloads: scene preparation can temporarily reject publication.
       // The next poll must retry unchanged bytes rather than silently losing the edit.

@@ -43,6 +43,17 @@ def validate(document, map_hash):
                            halfSize=vector(volume.get('halfSize'), 'halfSize', True),
                            rotationDegrees=vector(volume.get('rotationDegrees'), 'rotationDegrees'),
                            capture=vector(volume.get('capture'), 'capture')))
+        if 'sampling' in volume:
+            sampling = volume['sampling']
+            if not isinstance(sampling, dict):
+                raise ValueError('Invalid reflection sampling settings')
+            lo = vector(sampling.get('minimum'), 'influence minimum')
+            hi = vector(sampling.get('maximum'), 'influence maximum')
+            distance = sampling.get('blendDistance')
+            if any(a >= b for a, b in zip(lo, hi)) or isinstance(distance, bool) or \
+                    not isinstance(distance, (int, float)) or not math.isfinite(distance) or not 0 <= distance <= 1e8:
+                raise ValueError('Invalid reflection influence bounds or blend distance')
+            result[-1]['sampling'] = dict(minimum=lo, maximum=hi, blendDistance=distance)
     clean = dict(version=1, units='bsp', mapSha256=map_hash,
                  mapName=str(document.get('mapName', ''))[:200], volumes=result)
     if 'reference' in document:
@@ -125,6 +136,27 @@ def from_probe_report(payload, map_name, map_hash):
         volume = dict(id=f'auto-{index}-{report["activeHash"]}', name=f'Automatic {index}',
                       priority=probe.get('priority', 0), center=center, halfSize=[(b-a)/2 for a,b in zip(lo,hi)],
                       rotationDegrees=rotation, capture=vector(probe.get('position'), 'position'))
+        if 'influenceMinimum' in probe or 'influenceMaximum' in probe or 'featherDistance' in probe:
+            influence_lo = vector(probe.get('influenceMinimum'), 'influence minimum')
+            influence_hi = vector(probe.get('influenceMaximum'), 'influence maximum')
+            feather = vector(probe.get('featherDistance'), 'feather distance', True)
+            half = [(b-a)/2 for a, b in zip(influence_lo, influence_hi)]
+            if any(h <= 0 for h in half):
+                raise ValueError('Invalid influence bounds in probe report')
+            close = lambda a, b: math.isclose(a, b, rel_tol=1e-5, abs_tol=1e-5)
+            if all(close(width, h*.2) for width, h in zip(feather, half)):
+                distance = 0
+            else:
+                distance = max(feather)
+                if not all(close(width, min(distance, h)) for width, h in zip(feather, half)):
+                    raise ValueError('Probe report uses unsupported independent axis feather distances')
+            # The editor recentres the projection frame around its box midpoint.
+            # Rebase influence into that same frame without rescaling host units.
+            midpoint = [(a+b)/2 for a, b in zip(lo, hi)]
+            legacy = influence_lo == lo and influence_hi == hi and close(distance, .5 / scale)
+            if not legacy:
+                volume['sampling'] = dict(minimum=[a-c for a, c in zip(influence_lo, midpoint)],
+                    maximum=[b-c for b, c in zip(influence_hi, midpoint)], blendDistance=distance)
         result['volumes'].append(volume)
     return validate(result, map_hash)
 
@@ -138,7 +170,9 @@ def runtime_binary(value):
         raise ValueError('Runtime export requires a BSP SHA-256 fingerprint')
     if len(clean['volumes']) > MAX_RUNTIME_VOLUMES:
         raise ValueError(f'The renderer currently supports at most {MAX_RUNTIME_VOLUMES} authored cubemaps')
-    result = bytearray(b'BSPCUBE1' + bytes.fromhex(digest) + struct.pack('<I', len(clean['volumes'])))
+    extended = any('sampling' in volume for volume in clean['volumes'])
+    result = bytearray((b'BSPCUBE2' if extended else b'BSPCUBE1') + bytes.fromhex(digest) +
+                       struct.pack('<I', len(clean['volumes'])))
     identities = set()
     for volume in clean['volumes']:
         identity = int.from_bytes(hashlib.sha256(volume['id'].encode()).digest()[:8], 'little') or 1
@@ -157,4 +191,10 @@ def runtime_binary(value):
             raise ValueError('A runtime capture point must lie inside its projection volume')
         result.extend(struct.pack('<Q6f12f3fi', identity, *[-h for h in volume['halfSize']],
             *volume['halfSize'], *[v for row in rows for v in row], *volume['capture'], volume['priority']))
+        if extended:
+            # Documents use Source BSP units. Preserve old half-metre feathering
+            # for unchanged volumes in a mixed old/new document.
+            sampling = volume.get('sampling', dict(minimum=[-h for h in volume['halfSize']],
+                maximum=volume['halfSize'], blendDistance=.5 / .0254))
+            result.extend(struct.pack('<7f', *sampling['minimum'], *sampling['maximum'], sampling['blendDistance']))
     return bytes(result)

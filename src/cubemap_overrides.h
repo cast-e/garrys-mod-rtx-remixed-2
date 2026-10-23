@@ -7,7 +7,12 @@
 namespace proxy::cubemaps {
   using Fingerprint = std::array<uint8_t, 32>;
   Fingerprint fingerprint(const std::vector<uint8_t> & bytes);
-  std::vector<remixapi_ReflectionVolumeEXT> decode(const std::vector<uint8_t> & bytes, const Fingerprint &map);
+  struct Document {
+    bool independentSampling = false;
+    std::vector<remixapi_ReflectionVolumeEXT> volumes;
+    std::vector<remixapi_ReflectionSamplingEXT> sampling;
+  };
+  Document decode(const std::vector<uint8_t> & bytes, const Fingerprint &map);
   class Watcher {
   public:
     void configure(const std::vector<uint8_t> & map, uint64_t sceneId, std::filesystem::path file);

@@ -11,6 +11,8 @@ namespace {
   uint64_t revision = 0;
   int32_t priority = 0;
   bool refuseNext = false;
+  uint32_t version = 0;
+  float influenceMinimum = 0, blendDistance = 0;
   void require(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
   remixapi_ErrorCode REMIXAPI_CALL publish(const remixapi_ReflectionVolumesInfoEXT *request) {
     if (!request) { ++clears; return REMIXAPI_ERROR_CODE_SUCCESS; }
@@ -18,6 +20,14 @@ namespace {
     ++calls; revision = request->revision; volumeCount = request->volumeCount;
     if (refuseNext) { refuseNext = false; return REMIXAPI_ERROR_CODE_GENERAL_FAILURE; }
     if (volumeCount) priority = request->volumes[0].priority;
+    version = request->version;
+    if (version == REMIXAPI_REFLECTION_VOLUMES_SAMPLING_VERSION_EXT) {
+      require(request->structSize == sizeof(remixapi_ReflectionVolumesSamplingInfoEXT), "Sampling request preserves its extended size");
+      const auto extended = reinterpret_cast<const remixapi_ReflectionVolumesSamplingInfoEXT *>(request);
+      require(extended->sampling && volumeCount == 1, "Extended watcher passes matching sampling records");
+      influenceMinimum = extended->sampling[0].minimum[0];
+      blendDistance = extended->sampling[0].blendDistance;
+    }
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
 }
@@ -34,7 +44,7 @@ int main(int argc, char **argv) try {
   const uint32_t count = 1; std::memcpy(bytes.data()+40, &count, 4);
   remixapi_ReflectionVolumeEXT volume{}; volume.id = 19; volume.priority = -7;
   std::memcpy(bytes.data()+44, &volume, sizeof(volume));
-  require(decode(bytes, hash).front().priority == -7, "Packed sidecar preserves signed priorities");
+  require(decode(bytes, hash).volumes.front().priority == -7, "Packed sidecar preserves signed priorities");
   auto full = bytes;
   const uint32_t maximum = REMIXAPI_REFLECTION_VOLUMES_MAX_EXT;
   full.resize(44 + size_t(maximum) * sizeof(volume));
@@ -43,7 +53,7 @@ int main(int argc, char **argv) try {
     auto entry = volume; entry.id = i + 1;
     std::memcpy(full.data()+44+size_t(i)*sizeof(entry), &entry, sizeof(entry));
   }
-  require(decode(full, hash).size() == maximum, "The complete authored volume quota decodes without truncation");
+  require(decode(full, hash).volumes.size() == maximum, "The complete authored volume quota decodes without truncation");
   auto bad = hash; bad[0] ^= 1;
   bool rejected = false;
   try { decode(bytes, bad); } catch (const std::exception &) { rejected = true; }
@@ -83,6 +93,31 @@ int main(int argc, char **argv) try {
   require(calls == 5 && revision == 5, "Unchanged bytes retry after renderer rejection");
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 5, "Accepted retry stops redundant publication");
+  bytes.resize(44 + 124);
+  std::memcpy(bytes.data(), "BSPCUBE2", 8);
+  std::memcpy(bytes.data()+40, &count, 4);
+  std::memcpy(bytes.data()+44, &volume, sizeof(volume));
+  remixapi_ReflectionSamplingEXT sampling{};
+  sampling.minimum[0] = -2;
+  sampling.maximum[0] = 3;
+  sampling.blendDistance = .25f;
+  std::memcpy(bytes.data()+44+96, &sampling, sizeof(sampling));
+  const auto extended = decode(bytes, hash);
+  require(extended.independentSampling && extended.volumes.size() == 1 && extended.sampling.size() == 1 &&
+              extended.sampling[0].minimum[0] == -2 && extended.sampling[0].blendDistance == .25f,
+          "Version-two sidecars preserve independent sampling alongside unchanged volume records");
+  auto truncated = bytes; truncated.pop_back();
+  rejected = false;
+  try { decode(truncated, hash); } catch (const std::exception &) { rejected = true; }
+  require(rejected, "Truncated version-two sampling cannot publish a partial edit");
+  write();
+  refuseNext = true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 6, "Version-two publication reaches the renderer and preserves rejection semantics");
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 7 && version == REMIXAPI_REFLECTION_VOLUMES_SAMPLING_VERSION_EXT &&
+              influenceMinimum == -2 && blendDistance == .25f,
+          "An unchanged version-two document retries and publishes independent sampling atomically");
   std::filesystem::remove(file);
   std::puts("Cubemap sidecar fingerprints, bounded decoding and live publication passed");
 } catch (const std::exception &error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }

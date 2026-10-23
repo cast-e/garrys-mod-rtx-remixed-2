@@ -108,6 +108,54 @@ class AuthoringData(unittest.TestCase):
         with self.assertRaises(ValueError):
             document.runtime_binary(value)
 
+    def test_probe_report_preserves_independent_influence_and_feather(self):
+        probe = dict(position=[1, 2, 3], minimum=[0, 0, 0], maximum=[2, 4, 6],
+                     influenceMinimum=[-2, -4, -6], influenceMaximum=[4, 8, 12],
+                     featherDistance=[.6, 1.2, 1.8])
+        def convert():
+            payload = json.dumps(dict(version=1, activeHash='42', metersPerUnit=.0254, probes=[probe])).encode()
+            return document.from_probe_report(payload, 'test', 'a'*64)
+        result = convert()
+        sampling = result['volumes'][0]['sampling']
+        self.assertEqual(sampling['minimum'], [-3, -6, -9])
+        self.assertEqual(sampling['maximum'], [3, 6, 9])
+        self.assertEqual(sampling['blendDistance'], 0)
+        self.assertEqual(document.runtime_binary(result)[:8], b'BSPCUBE2')
+        probe['featherDistance'] = [2, 2, 2]
+        self.assertEqual(convert()['volumes'][0]['sampling']['blendDistance'], 2)
+        probe['featherDistance'] = [1, 2, 3]
+        with self.assertRaises(ValueError):
+            convert()
+        probe.update(minimum=[-100]*3, maximum=[100]*3, influenceMinimum=[-100]*3,
+                     influenceMaximum=[100]*3, featherDistance=[.5/.0254]*3)
+        legacy = convert()
+        self.assertNotIn('sampling', legacy['volumes'][0])
+        self.assertEqual(document.runtime_binary(legacy)[:8], b'BSPCUBE1')
+
+    def test_independent_sampling_roundtrip_and_binary_compatibility(self):
+        value = document.empty('test', 'a' * 64)
+        volume = document.new_volume([0, 0, 0])
+        value['volumes'] = [volume]
+        legacy = document.runtime_binary(value)
+        self.assertEqual(legacy[:8], b'BSPCUBE1')
+        volume['sampling'] = dict(minimum=[-200, -100, -50], maximum=[300, 100, 75], blendDistance=12)
+        clean = document.validate(value, 'a' * 64)
+        self.assertEqual(clean, value)
+        encoded = document.runtime_binary(clean)
+        self.assertEqual(encoded[:8], b'BSPCUBE2')
+        self.assertEqual(len(encoded), 44 + 124)
+        self.assertEqual(encoded[44:140], legacy[44:140])
+        self.assertEqual(struct.unpack_from('<7f', encoded, 140), (-200, -100, -50, 300, 100, 75, 12))
+        value['volumes'].append(document.new_volume([0, 0, 0]))
+        mixed = document.runtime_binary(value)
+        fallback = struct.unpack_from('<7f', mixed, 44 + 124 + 96)
+        self.assertEqual(fallback[:6], (-128, -128, -128, 128, 128, 128))
+        self.assertAlmostEqual(fallback[6], .5 / .0254, places=5)
+        for distance in [-1, float('nan'), True]:
+            value['volumes'][0]['sampling']['blendDistance'] = distance
+            with self.assertRaises(ValueError):
+                document.validate(value, 'a' * 64)
+
     def test_geometry_from_world_model_only(self):
         # One triangle, plus an unrelated vertex which must not become an edge.
         lumps = {3: struct.pack('<12f', 0, 0, 0, 128, 0, 0, 0, 128, 0, 999, 999, 999),

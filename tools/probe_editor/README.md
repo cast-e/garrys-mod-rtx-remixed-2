@@ -77,6 +77,29 @@ A different BSP revision or malformed edit preserves the last valid request. Rem
 restores automatic cubemaps; saving an empty document explicitly disables local cubemaps.
 
 For another install, invoke `python -m probe_editor` with an explicit `--runtime-output <path>`.
+Independent sampling metadata is optional in each JSON volume:
+
+```json
+"sampling": {
+  "minimum": [-160, -128, -96],
+  "maximum": [160, 128, 96],
+  "blendDistance": 16
+}
+```
+
+These bounds use the box's local axes and center, independently of its projection half size.
+The capture stays constrained to the projection box, and need not lie inside influence bounds.
+Blend distance is in BSP units; zero derives a 20%-of-half-extent feather band.
+Probe-report imports preserve representable influence bounds and feathering, rebased into the editor's
+centered frame. Unsupported independent axis feather widths are rejected rather than silently changed.
+The current viewport handles still edit projection bounds; independent influence handles remain future work.
+
+Documents without sampling changes keep the `BSPCUBE1` runtime format. Extended documents use
+`BSPCUBE2`, with the original 96-byte volume followed by a 28-byte sampling record. Mixed documents
+preserve the legacy half-metre feather for unchanged volumes. Extended files require both the updated
+adapter and a runtime supporting `REMIXAPI_REFLECTION_VOLUMES_SAMPLING_VERSION_EXT`; a rejected
+publication retains the previous valid override. Existing sidecars are not rewritten automatically.
+
 The adapter's `OPENREMIX_PROXY_CUBEMAP_BOUNDS` environment variable can select a diagnostic sidecar
 instead of the default map-specific path. The JSON itself is not parsed by the game.
 
