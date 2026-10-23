@@ -17,6 +17,11 @@ namespace {
 std::string normalize(std::string path) {
   for (auto &c : path)
     c = c == '\\' ? '/' : char(std::tolower(static_cast<unsigned char>(c)));
+  // Some studio material search directories end in doubled separators.
+  // Windows tolerates them; VPK keys require the same canonical spelling.
+  path.erase(std::unique(path.begin(), path.end(), [](char a, char b) {
+    return a == '/' && b == '/';
+  }), path.end());
   while (!path.empty() && path[0] == '/')
     path.erase(0, 1);
   // Older BSP prop dictionaries (Lost Coast, for example) prefix model paths

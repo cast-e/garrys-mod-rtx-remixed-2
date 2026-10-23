@@ -56,7 +56,8 @@ int main(int argc, char **argv) {
   require(SetEnvironmentVariableW(L"OPENREMIX_PROXY_CONTENT_MOUNTS", mountsEnabled ? mounts.c_str() : nullptr),
           "Configure explicit process-local content roots");
   proxy::fs::init(root.wstring());
-  for (const char *name : {"models/packed.mdl", "./MODELS/packed.mdl", ".\\.\\models\\packed.mdl"}) {
+  for (const char *name : {"models/packed.mdl", "./MODELS/packed.mdl", ".\\.\\models\\packed.mdl",
+                            "models//packed.mdl", "models\\\\packed.mdl", ".//models/\\/packed.mdl"}) {
     uint64_t size = 0;
     std::vector<uint8_t> bytes;
     require(proxy::fs::size(name, size) && size == 6, "Relative model prefix must resolve VPK size");
