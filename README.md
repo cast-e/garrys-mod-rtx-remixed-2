@@ -422,6 +422,20 @@ grid and avoids capturing from inside props.
 Hints retain authored order; `rtx.native.forward.reflectionProbes` remains the
 capture budget (maximum 64), so a low budget cannot cover every room.
 
+Experimental receiver assignments: `OPENREMIX_PROXY_CUBEMAP_RECEIVER_BINDINGS=1` connects
+resolved VMT `$envmap` capture origins to exact, unique origins in an accepted authored
+sidecar. This requires a paired native runtime supporting scene-scoped material reflection
+bindings and frame-snapshotted binding-only updates. It is off by default. Opaque imported
+materials use stable VMT-specific variants even when they share a base texture; changing a
+volume ID or removing the sidecar updates receiver metadata without replacing their meshes
+or diffuse bake inputs. Existing masks, PBR conversion and replacement keys stay in the
+material chain. Owned optical, blended and modulated imports are excluded. Missing or
+ambiguous assignments use ordinary volume selection. The switch does not import raw
+Black Mesa projection boxes, derive dynamic influence bounds, or establish visual parity
+with the original renderer. Live host qualification remains required before deployment.
+Authored bounds persist across same-map retained geometry refreshes; actual map teardown
+clears the request.
+
 
 For an automatic-placement experiment, launch the replay with
 `OPENREMIX_PROXY_REFLECTION_HINTS=0`. The BSP loader then supplies no authored

@@ -107,6 +107,7 @@ namespace proxy::cubemaps {
       // The next poll must retry unchanged bytes rather than silently losing the edit.
       m_seen = std::move(bytes);
       m_document = std::move(document);
+      m_acceptedRevision = m_revision;
       m_applied = true;
       m_error.clear();
       std::fprintf(stderr, "Authored cubemap bounds: %zu volumes, revision %llu\n", m_document.volumes.size(),

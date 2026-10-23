@@ -20,10 +20,12 @@ namespace proxy::cubemaps {
     // Render-thread view, valid until the next poll/configure. This records API
     // acceptance, not completion of the renderer's asynchronous capture work.
     const Document *accepted() const { return m_applied ? &m_document : nullptr; }
+    uint64_t acceptedRevision() const { return m_applied ? m_acceptedRevision : 0; }
   private:
     Fingerprint m_map{};
     std::filesystem::path m_file;
     uint64_t m_scene = 0, m_revision = 0;
+    uint64_t m_acceptedRevision = 0;
     bool m_applied = false;
     Document m_document;
     std::string m_error;

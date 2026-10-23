@@ -1,5 +1,6 @@
 #include "source_lights.h"
 #include "source_rendering.h"
+#include <remix/remix_reflection_ext.h>
 #include "styled_lights.h"
 #include "diag.h"
 #include "frame_profile.h"
@@ -371,6 +372,7 @@ float envScale(const char *name, float fallback);
 // replacements are keyed by it).
 struct EmissiveMaterial {
   remixapi_MaterialHandle handle = nullptr;
+  uint64_t reflectionSceneId = 0, reflectionVolumeId = 0;
   uint64_t lastFrame = 0;
   uint32_t pins = 0; // BSP materials holding it
 };
@@ -680,13 +682,16 @@ EmissiveMaterial *ensureEmissive(RemixTexture &t, const engine_materials::Shadin
     }
   }
   uint64_t hash = XXH3_64bits_withSeed(&key, sizeof(key), t.hash);
+  if (s.reflectionReceiverKey)
+    hash = XXH3_64bits_withSeed(&s.reflectionReceiverKey, sizeof(s.reflectionReceiverKey), hash);
   if (!hash || hash == t.hash)
     hash = ~t.hash;
   if (materialHash)
     *materialHash = hash;
   EmissiveMaterial &variant = g_emissiveMaterials[hash];
   variant.lastFrame = g_frame;
-  if (variant.handle)
+  const bool existed = variant.handle != nullptr;
+  if (existed && variant.reflectionSceneId == s.reflectionSceneId && variant.reflectionVolumeId == s.reflectionVolumeId)
     return &variant;
   wchar_t path[32], maskPath[32], normalPath[32], mapPaths[2][32];
   swprintf(path, 32, L"0x%llX", static_cast<unsigned long long>(t.hash));
@@ -746,7 +751,9 @@ EmissiveMaterial *ensureEmissive(RemixTexture &t, const engine_materials::Shadin
     enable.pNext = chain;
     chain = &enable;
   }
-  opaque.pNext = chain;
+  remixapi_MaterialReflectionBindingEXT reflection{
+      REMIXAPI_STRUCT_TYPE_MATERIAL_REFLECTION_BINDING_EXT, chain, s.reflectionSceneId, s.reflectionVolumeId};
+  opaque.pNext = s.reflectionReceiverKey ? static_cast<void *>(&reflection) : chain;
   opaque.albedoConstant = {1, 1, 1};
   opaque.opacityConstant = 1;
   opaque.alphaTestType = 7;
@@ -767,11 +774,15 @@ EmissiveMaterial *ensureEmissive(RemixTexture &t, const engine_materials::Shadin
   info.filterMode = 1;
   info.wrapModeU = info.wrapModeV = 1;
   if (g_api.CreateMaterial(&info, &variant.handle) != REMIXAPI_ERROR_CODE_SUCCESS) {
-    g_emissiveMaterials.erase(hash);
+    if (!existed) g_emissiveMaterials.erase(hash);
     ++g_stats.emissiveFailed;
     return nullptr;
   }
-  ++(emits ? g_stats.emissiveCreated : g_stats.pbrCreated);
+  variant.reflectionSceneId = s.reflectionSceneId;
+  variant.reflectionVolumeId = s.reflectionVolumeId;
+  if (existed) return &variant;
+  if (emits) ++g_stats.emissiveCreated;
+  else if (pbr.use) ++g_stats.pbrCreated;
   // Evicted variants (animated tints) leave their keys behind.
   if (t.emissive.size() >= 256)
     t.emissive.erase(std::remove_if(t.emissive.begin(), t.emissive.end(),
@@ -880,7 +891,7 @@ bsp::MaterialRef materialForHash(uint64_t hash, const engine_materials::Shading 
   const PbrMaps maps = emission ? pbrMapsFor(*texture, *emission, true, &complete) : PbrMaps{};
   if (!complete)
     return {};
-  if (!emission || (emission->mode == Shading::Lit && !maps.use)) {
+  if (!emission || (emission->mode == Shading::Lit && !maps.use && !emission->reflectionReceiverKey)) {
     ref.handle = ensureMaterial(*texture, 0);
     ref.keep = std::move(texture);
     return ref;

@@ -867,6 +867,9 @@ struct World {
   // materials resolved, props found in the 3D skybox); a bridge batch
   // recorded at one version is replayed while it lasts.
   uint64_t submitVersion = 0, batchVersion = ~0ull, stableVersion = ~0ull, stableSince = 0;
+  uint64_t receiverRevision = 0; // diagnostic binding generation; not geometry/bake membership
+  uint64_t receiverDocumentRevision = ~0ull;
+  size_t receiverMaterialCount = 0;
   bool batchValid = false;
   // The same instances as the runtime's scene instances (remix_native_ext.h):
   // added once per version and drawn by one call a frame.
@@ -1838,8 +1841,6 @@ template <typename Fn> Fn sceneFunction(const char *name) {
 }
 
 void invalidateBakeScene() {
-  if (auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT"))
-    publish(nullptr);
   if (auto publish = sceneFunction<PFN_remixapi_SetBakeSceneEXT>("remixapi_SetBakeSceneEXT")) {
     if (g_world.map.empty()) {
       publish(nullptr);
@@ -1873,6 +1874,10 @@ void dropSceneInstances() {
 }
 
 void destroyMeshes() {
+  // Only map teardown discards authored bounds. Same-map retained/material
+  // refreshes can invalidate diffuse inputs without forgetting the sidecar.
+  if (auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT"))
+    publish(nullptr);
   dropSceneInstances();
   g_world.sceneVersion = ~0ull;
   if (g_world.batchValid && g_world.api) {
@@ -3563,31 +3568,86 @@ bool skyCamera(float origin[3], float &scale) {
   return true;
 }
 
+static bool updateCubemapReceivers() {
+  static const bool bindReceivers = [] {
+    char option[8] = {};
+    return GetEnvironmentVariableA("OPENREMIX_PROXY_CUBEMAP_RECEIVER_BINDINGS", option, sizeof(option)) && option[0] == '1';
+  }();
+  bool bindingsChanged = false;
+  if (bindReceivers) {
+    static const auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT");
+    g_cubemapOverrides.poll(publish);
+    const auto revision = g_cubemapOverrides.acceptedRevision();
+    if (g_world.receiverDocumentRevision == revision && g_world.receiverMaterialCount == g_world.materials.size())
+      return false;
+    g_world.receiverDocumentRevision = revision;
+    g_world.receiverMaterialCount = g_world.materials.size();
+    const auto document = g_cubemapOverrides.accepted();
+    const auto sceneId = XXH3_64bits(g_world.map.data(), g_world.map.size()) | 1;
+    for (auto &material : g_world.materials) {
+      if (material.owned || material.requiresOwned || material.blended || material.modulate) continue;
+      if (!material.captureReference) continue;
+      const auto volumeId = document ? cubemaps::uniqueVolume(*material.captureReference, *document) : 0;
+      const auto scope = volumeId ? sceneId : 0;
+      auto &shading = material.shading;
+      const auto receiver = XXH3_64bits_withSeed(material.name.data(), material.name.size(), sceneId) | 1;
+      if (shading.reflectionReceiverKey == receiver && shading.reflectionSceneId == scope &&
+          shading.reflectionVolumeId == volumeId) continue;
+      shading.reflectionReceiverKey = receiver;
+      shading.reflectionSceneId = scope;
+      shading.reflectionVolumeId = volumeId;
+      material.resolved = false; // retain its previous pin until the replacement resolves
+      bindingsChanged = true;
+    }
+    if (bindingsChanged) {
+      ++g_world.receiverRevision;
+      const auto count = std::count_if(g_world.materials.begin(), g_world.materials.end(),
+          [](const auto &material) { return material.shading.reflectionVolumeId != 0; });
+      std::fprintf(stderr, "BSP authored receiver bindings: %zu materials, generation %llu\n", size_t(count),
+                   static_cast<unsigned long long>(g_world.receiverRevision));
+    }
+  }
+  return bindingsChanged;
+}
+
 void submit(MaterialLookup lookup) {
   if (!g_active || !g_world.api)
     return;
   const auto &api = *g_world.api;
   const uint64_t frame = g_world.frames++;
   animateSurfaceNormals();
+  const bool bindingsChanged = updateCubemapReceivers();
   // Materials resolve once the engine has uploaded their textures (at map
   // load, as a rule): every frame at first, then twice a second.
-  if (frame < 600 || frame % 30 == 0)
+  if (bindingsChanged || frame < 600 || frame % 30 == 0)
     for (auto &m : g_world.materials) {
       if (m.resolved || m.requiresOwned)
         continue;
       // A mask the engine never uploads (a format the proxy does not take)
       // must not keep the surface untextured: lit after ten seconds.
       // (A PBR conversion waits for its maps as well.)
-      const bool emissive =
-          (m.shading.mode != engine_materials::Shading::Lit || m.shading.pbr.active) && !m.maskDropped;
+      auto shading = m.shading;
+      if (m.maskDropped) {
+        shading.mode = engine_materials::Shading::Lit;
+        shading.pbr = {};
+        shading.mask.clear();
+      }
+      const bool emissive = shading.mode != engine_materials::Shading::Lit || shading.pbr.active;
+      const bool variant = emissive || shading.reflectionReceiverKey;
       for (uint64_t h : m.candidates) {
-        auto ref = lookup(h, emissive ? &m.shading : nullptr, &m.maskCandidates);
-        if (!ref.handle && emissive && frame >= 600 && (ref = lookup(h, nullptr, nullptr)).handle)
-          m.maskDropped = true;
+        auto ref = lookup(h, variant ? &shading : nullptr, &m.maskCandidates);
+        if (!ref.handle && emissive && frame >= 600) {
+          auto fallback = shading;
+          fallback.mode = engine_materials::Shading::Lit;
+          fallback.pbr = {};
+          fallback.mask.clear();
+          ref = lookup(h, fallback.reflectionReceiverKey ? &fallback : nullptr, nullptr);
+          if (ref.handle) m.maskDropped = true;
+        }
         if (ref.handle) {
+          if (ref.handle != m.ref.handle) ++g_world.submitVersion;
           m.ref = std::move(ref);
           m.resolved = true;
-          ++g_world.submitVersion;
           break;
         }
       }
@@ -4276,7 +4336,7 @@ void dumpStatistics(FILE *out) {
     if (const auto document = g_cubemapOverrides.accepted();
         document && cubemaps::uniqueVolume(*material.captureReference, *document)) ++authoredMatches;
   }
-  fprintf(out, "   BSP explicit material capture references: %zu; unique accepted-sidecar matches: %zu (not yet receiver bindings)\n",
+  fprintf(out, "   BSP explicit material capture references: %zu; unique accepted-sidecar matches: %zu (binding opt-in)\n",
           captureReferences, authoredMatches);
   for (const auto &[key, model] : g_world.propModels)
     if (model.engineParts)

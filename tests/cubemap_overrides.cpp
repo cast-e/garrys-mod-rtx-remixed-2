@@ -70,6 +70,7 @@ int main(int argc, char **argv) try {
   require(calls == 1 && revision == 1 && priority == -7, "Initial sidecar is published once");
   require(watcher.accepted() && watcher.accepted()->volumes[0].priority == -7,
           "Receiver lookup sees only a renderer-accepted document");
+  require(watcher.acceptedRevision() == 1, "Accepted metadata carries the successful request revision");
   volume.priority = 9; std::memcpy(bytes.data()+44, &volume, sizeof(volume)); write();
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 2 && revision == 2 && priority == 9, "Changed sidecars publish independently of bake membership");
@@ -95,6 +96,7 @@ int main(int argc, char **argv) try {
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 4, "A recreated sidecar reaches the renderer");
   require(!watcher.accepted(), "Refused publication cannot activate receiver metadata");
+  require(watcher.acceptedRevision() == 0, "Refused publication does not advance accepted receiver state");
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 5 && revision == 5, "Unchanged bytes retry after renderer rejection");
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);

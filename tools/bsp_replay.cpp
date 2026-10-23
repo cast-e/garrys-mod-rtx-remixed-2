@@ -12,6 +12,7 @@
 #include "replay_readiness.h"
 #include "replay_report.h"
 #include <remix/remix_bake_ext.h>
+#include <remix/remix_reflection_ext.h>
 #include <cstring>
 #include <remix/remix_native_ext.h>
 #include <remix/remix_usd_ext.h>
@@ -87,7 +88,7 @@ public:
       : api(api), reportHashes(reportHashes), freezeAnimation(freezeAnimation) {}
   ~Materials() {
     for (auto &[key, material] : materials)
-      api.DestroyMaterial(material);
+      api.DestroyMaterial(material.handle);
     for (auto &[name, texture] : textures)
       if (texture.handle)
         api.DestroyTexture(texture.handle);
@@ -105,6 +106,7 @@ public:
     key << base << ':' << sourceHash;
     if (shading) {
       const auto &s = *shading;
+      if (s.reflectionReceiverKey) key << ":receiver:" << s.reflectionReceiverKey;
       key << ':' << int(s.mode) << ':' << s.mask << ':' << s.maskScale << ':' << s.luminous;
       for (float c : s.tint)
         key << ':' << c;
@@ -114,8 +116,11 @@ public:
         key << ':' << m.texture << ':' << m.channel << ':' << m.curve << ':' << m.invert << ':' << m.exponent
             << ':' << m.bias << ':' << m.scale;
     }
-    if (auto found = materials.find(key.str()); found != materials.end())
-      return {found->second, {}};
+    const auto found = materials.find(key.str());
+    const uint64_t sceneId = shading ? shading->reflectionSceneId : 0;
+    const uint64_t volumeId = shading ? shading->reflectionVolumeId : 0;
+    if (found != materials.end() && found->second.sceneId == sceneId && found->second.volumeId == volumeId)
+      return {found->second.handle, {}};
     const auto albedo = image(base);
     if (albedo.empty())
       return {};
@@ -164,7 +169,7 @@ public:
     remixapi_MaterialInfo info = {};
     info.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_INFO;
     info.pNext = &opaque;
-    info.hash = nextHash++;
+    info.hash = found != materials.end() ? found->second.hash : nextHash++;
     info.albedoTexture = albedo.c_str();
     info.normalTexture = normal.empty() ? nullptr : normal.c_str();
     info.emissiveTexture = mask.empty() ? nullptr : mask.c_str();
@@ -208,9 +213,15 @@ public:
       pbr.pNext = opaque.pNext;
       opaque.pNext = &pbr;
     }
+    remixapi_MaterialReflectionBindingEXT reflection{};
+    if (shading && shading->reflectionReceiverKey) {
+      reflection = {REMIXAPI_STRUCT_TYPE_MATERIAL_REFLECTION_BINDING_EXT, opaque.pNext,
+                    shading->reflectionSceneId, shading->reflectionVolumeId};
+      opaque.pNext = &reflection;
+    }
     remixapi_MaterialHandle handle = nullptr;
     check(api.CreateMaterial(&info, &handle), "CreateMaterial");
-    materials.emplace(key.str(), handle);
+    materials[key.str()] = {handle, info.hash, sceneId, volumeId};
     return {handle, {}};
   }
 
@@ -224,7 +235,8 @@ private:
   bool freezeAnimation;
   uint64_t nextHash = 0x7265706c00000001ull;
   std::map<std::string, Texture> textures;
-  std::map<std::string, remixapi_MaterialHandle> materials;
+  struct Material { remixapi_MaterialHandle handle; uint64_t hash, sceneId, volumeId; };
+  std::map<std::string, Material> materials;
   std::set<std::string> failures;
   void fail(const std::string &name, const std::string &reason) {
     if (failures.insert(name).second)
