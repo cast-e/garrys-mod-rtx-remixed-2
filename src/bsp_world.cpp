@@ -228,6 +228,14 @@ std::string lower(std::string s) {
   return s;
 }
 
+// Material texture references may already include the VTF extension.
+std::string texturePath(const std::string &name) {
+  auto path = lower(name);
+  if (path.size() < 4 || path.compare(path.size() - 4, 4, ".vtf") != 0)
+    path += ".vtf";
+  return "materials/" + path;
+}
+
 bool parseKeyValues(const std::string &text, KeyValues &out) {
   std::vector<std::string> tokens;
   for (size_t i = 0; i < text.size();) {
@@ -361,11 +369,15 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
   // D3D9 has no 24-bit or RGBA-order formats: Source widens/swizzles these
   // to B8G8R8A8 or B8G8R8X8 before the upload the proxy hashes. X is filled
   // with 0xff or 0 depending on the conversion path: both are candidates.
-  int convert = 0; // 0 none, 2 RGB888, 3 BGR888, 1 RGBA8888
+  int convert = 0; // 0 none, 2 RGB888, 3 BGR888, 1 RGBA8888, 4 ABGR8888
   switch (format) {
   case 0: // RGBA8888
     pixelBytes = 4;
     convert = 1;
+    break;
+  case 1: // ABGR8888
+    pixelBytes = 4;
+    convert = 4;
     break;
   case 2: // RGB888
   case 3: // BGR888
@@ -408,6 +420,10 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
         for (size_t i = 0; i < pixels; ++i) {
           const uint8_t *s = level.data() + i * pixelBytes;
           uint8_t *d = bgra.data() + i * 4;
+          if (convert == 4) {
+            d[0] = s[1]; d[1] = s[2]; d[2] = s[3]; d[3] = s[0];
+            continue;
+          }
           const bool rgbOrder = convert != 3;
           d[0] = rgbOrder ? s[2] : s[0];
           d[1] = s[1];
@@ -415,7 +431,7 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
           d[3] = convert == 1 ? s[3] : uint8_t(fill);
         }
         hashes.push_back(legacy ? XXH64(bgra.data(), bgra.size(), 0) : XXH3_64bits(bgra.data(), bgra.size()));
-        if (convert == 1)
+        if (convert == 1 || convert == 4)
           break;
       }
     }
@@ -427,7 +443,7 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
 // Of the index's copy and, when the engine has a different one (a workshop
 // addon replacing a stock texture), of that as well.
 std::vector<uint64_t> textureHashes(const std::string &name) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = texturePath(name);
   std::vector<uint64_t> hashes = textureHashes(path, false);
   for (uint64_t hash : textureHashes(path, true))
     if (std::find(hashes.begin(), hashes.end(), hash) == hashes.end())
@@ -446,7 +462,7 @@ std::vector<uint64_t> waterReplacementKeys(const KeyValues &material) {
   }
   std::vector<uint64_t> keys;
   auto append = [&](const std::string &name) {
-    const auto path = "materials/" + lower(name) + ".vtf";
+    const auto path = texturePath(name);
     for (const bool engine : {false, true})
       for (const bool legacy : {true, false})
         for (const auto key : textureHashes(path, engine, legacy))
@@ -464,7 +480,7 @@ std::vector<uint64_t> waterReplacementKeys(const KeyValues &material) {
 bool textureHasAlpha(const std::string &name) {
   std::vector<uint8_t> header;
   uint32_t flags = 0;
-  if (!fs::read("materials/" + lower(name) + ".vtf", header, 0, 64) || header.size() < 24 ||
+  if (!fs::read(texturePath(name), header, 0, 64) || header.size() < 24 ||
       std::memcmp(header.data(), "VTF", 4) != 0)
     return false;
   std::memcpy(&flags, header.data() + 20, 4);
@@ -475,7 +491,7 @@ bool textureHasAlpha(const std::string &name) {
 // the whole image of one without mips. False for a missing file or a format
 // not read here.
 bool textureMean(const std::string &name, float rgba[4]) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = texturePath(name);
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total) || !fs::read(path, header, 0, 80) || header.size() < 64 ||
@@ -494,6 +510,7 @@ bool textureMean(const std::string &name, float rgba[4]) {
   int order[4] = {0, 1, 2, 3}; // where r, g, b, a are in a pixel (-1: none)
   switch (format) {
   case 0: pixelBytes = 4; break;                                             // RGBA8888
+  case 1: pixelBytes = 4; order[0] = 3; order[1] = 2; order[2] = 1; order[3] = 0; break; // ABGR8888
   case 2: pixelBytes = 3; order[3] = -1; break;                              // RGB888
   case 3: pixelBytes = 3; order[0] = 2; order[2] = 0; order[3] = -1; break;  // BGR888
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
@@ -1257,7 +1274,7 @@ bool waterNormalsEnabled() {
 // most 64 MB of them. Else why not: a missing file, a format not read here.
 const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height,
                       std::vector<std::vector<uint8_t>> &out) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = texturePath(name);
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total))
@@ -1277,6 +1294,7 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   int order[4] = {0, 1, 2, 3}; // where r, g, b, a are in a pixel (-1: none)
   switch (format) {
   case 0: pixelBytes = 4; break;                                             // RGBA8888
+  case 1: pixelBytes = 4; order[0] = 3; order[1] = 2; order[2] = 1; order[3] = 0; break; // ABGR8888
   case 2: pixelBytes = 3; order[3] = -1; break;                              // RGB888
   case 3: pixelBytes = 3; order[0] = 2; order[2] = 0; order[3] = -1; break;  // BGR888
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
@@ -3048,7 +3066,7 @@ std::vector<uint64_t> textureCandidates(const std::string &name) {
 
 uint64_t textureReplacementHash(const std::string &name, uint64_t sourceHash) {
   ensureFileSystem();
-  const auto path = "materials/" + lower(name) + ".vtf";
+  const auto path = texturePath(name);
   for (const bool engine : {false, true}) {
     const auto hashes = textureHashes(path, engine);
     const auto found = std::find(hashes.begin(), hashes.end(), sourceHash);
@@ -3133,7 +3151,7 @@ static void loadSkyFace(KeyValues &values, SkyboxFace &image) {
     throw std::runtime_error("three-texture HDR sky encoding is unsupported");
   } else if (!hdr.empty()) {
     std::vector<uint8_t> file;
-    const auto path = "materials/" + lower(hdr) + ".vtf";
+    const auto path = texturePath(hdr);
     uint64_t bytes = 0;
     if (!fs::size(path, bytes) || bytes > (64u << 20) || !fs::read(path, file, 0, bytes) || file.size() != bytes)
       throw std::runtime_error("HDR sky texture is missing or exceeds 64 MiB");
@@ -4060,7 +4078,7 @@ void dumpStatistics(FILE *out) {
         std::string base = loadMaterial(m.name, kv) && kv.values.count("$basetexture") ? kv.values["$basetexture"] : "-";
         std::vector<uint8_t> header;
         int32_t format = -1;
-        if (base != "-" && fs::read("materials/" + lower(base) + ".vtf", header, 0, 64) && header.size() >= 56)
+        if (base != "-" && fs::read(texturePath(base), header, 0, 64) && header.size() >= 56)
           std::memcpy(&format, header.data() + 52, 4);
         examples += "      " + m.name + " (" + kv.shader + ", $basetexture " + base + ", vtf format " +
                     std::to_string(format) + (m.candidates.empty() ? ", no hash" : ", not uploaded") + ")\n";
