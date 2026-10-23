@@ -681,7 +681,10 @@ int main(int argc, char **argv) {
   remixapi_Interface api = {};
   remixapi_HMODULE library = nullptr;
   int result = 0;
-  const auto previousScreenshot = lastWrite(argv[4]);
+  // The screenshot API requires absolute destinations, including the camera
+  // path captures derived from this filename. Resolve once for every output.
+  const auto output = std::filesystem::absolute(argv[4]).string();
+  const auto previousScreenshot = lastWrite(output);
   try {
     check(remixapi_lib_loadRemixDllAndInitialize(path.c_str(), &api, &library), "Load runtime");
     remixapi_StartupInfo startup = {};
@@ -713,7 +716,7 @@ int main(int argc, char **argv) {
                                std::to_string(client.right) + "x" + std::to_string(client.bottom));
     ShowWindow(window, SW_SHOWNOACTIVATE);
     std::printf("Replay target %u x %u\n", settings.width, settings.height);
-    replay(api, library, window, argv[3], argv[4], argc > 5 ? std::max(4, std::atoi(argv[5])) : 600,
+    replay(api, library, window, argv[3], output.c_str(), argc > 5 ? std::max(4, std::atoi(argv[5])) : 600,
            settings);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
@@ -721,7 +724,7 @@ int main(int argc, char **argv) {
   }
   if (library)
     remixapi_lib_shutdownAndUnloadRemixDll(&api, library);
-  if (!result && lastWrite(argv[4]) == previousScreenshot) {
+  if (!result && lastWrite(output) == previousScreenshot) {
     std::fprintf(stderr, "Replay produced no screenshot\n");
     result = 1;
   }
