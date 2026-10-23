@@ -1,4 +1,5 @@
 #include "source_lights.h"
+#include "source_rendering.h"
 #include "styled_lights.h"
 // Standalone diagnostic host for the production BSP loader. It never injects
 // into Source or writes installed content. Static VMTs only; no material proxies.
@@ -534,9 +535,10 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
         remixapi_DenoisingStatisticsEXT denoising{};
         denoising.structSize = sizeof(denoising);
         check(denoisingStatistics(&denoising), "GetDenoisingStatistics");
-        ready &= denoising.activeDenoiser == denoising.requestedDenoiser &&
-                 denoising.activeTaa == denoising.requestedTaa;
-        if (!ready && frame % 120 == 0)
+        const bool temporalReady = denoising.activeDenoiser == denoising.requestedDenoiser &&
+                                   denoising.activeTaa == denoising.requestedTaa;
+        ready &= temporalReady;
+        if (!temporalReady && frame % 120 == 0)
           std::printf("Temporal readiness: denoiser active %u / requested %u, TAA active %u / requested %u\n",
                       unsigned(denoising.activeDenoiser), unsigned(denoising.requestedDenoiser),
                       unsigned(denoising.activeTaa), unsigned(denoising.requestedTaa));
@@ -709,7 +711,9 @@ int main(int argc, char **argv) {
     check(api.Startup(&startup), "Startup");
     check(api.SetConfigVariable("rtx.native.backend", "forwardplus"), "Select Forward+");
     check(api.SetConfigVariable("rtx.native.pathtrace.overrideLight", "0"), "Disable profile sun");
-    check(api.SetConfigVariable("rtx.native.forward.sceneScale", "0.0254"), "Set Source scale");
+    proxy::source_rendering::lightingDefaults([&](const char *key, const char *value) {
+      check(api.SetConfigVariable(key, value), "Set Source lighting defaults");
+    });
     const auto settings = argc > 6 ? proxy::replay::configure(api, argv[6]) : proxy::replay::Settings{};
     if (!settings.mods.empty()) {
       const auto configure = reinterpret_cast<decltype(&remixapi_ConfigureUSDModsEXT)>(

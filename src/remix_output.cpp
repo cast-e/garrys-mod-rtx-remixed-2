@@ -1,4 +1,5 @@
 #include "source_lights.h"
+#include "source_rendering.h"
 #include "styled_lights.h"
 #include "diag.h"
 #include "frame_profile.h"
@@ -2174,17 +2175,7 @@ bool startRemix() {
     if (!configDefault || configDefault(key, value) != REMIXAPI_ERROR_CODE_SUCCESS)
       g_api.SetConfigVariable(key, value);
   };
-  // Source units are inches: the runtime's default local light reach (16
-  // units, meant as meters) would fade flashlights and lamps past ~40 cm.
-  setDefault("rtx.native.pathtrace.localRange", "0");
-  // The adaptive local-light budget compares absolute importance against
-  // thresholds tuned for meter-scale scenes; with Source's light intensities
-  // nearly every pixel takes the maximum 4 shadow rays (~10 ms on c8m1).
-  setDefault("rtx.native.pathtrace.adaptiveLocalSampling", "0");
-  // Source units are inches: the runtime converts its meter-based defaults
-  // (denoiser hit distances, visibility-guiding cells) with the scene scale.
-  setDefault("rtx.native.pathtrace.sceneScale", "0.0254");
-  setDefault("rtx.native.forward.sceneScale", "0.0254");
+  source_rendering::lightingDefaults(setDefault);
   // Static world brushes (onPresent) would otherwise make every ray traverse
   // a static and a dynamic acceleration structure.
   setDefault("rtx.native.pathtrace.combinedTlas", "1");
