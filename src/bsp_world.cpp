@@ -3329,8 +3329,13 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
     g_world.bakeMaterialVersion = g_world.submitVersion;
     g_world.bakeMaterialCount = g_world.materials.size();
   }
-  if (firstUnreadyBakeMaterial(g_world.bakeMaterials, g_world.materials)) {
-    g_world.bakeReason = "static materials are still loading";
+  if (const auto pending = firstUnreadyBakeMaterial(g_world.bakeMaterials, g_world.materials)) {
+    if (*pending >= g_world.materials.size())
+      g_world.bakeReason = "retained geometry references an invalid static material";
+    else if (g_world.materials[*pending].candidates.empty())
+      g_world.bakeReason = "required static material has no supported texture source";
+    else
+      g_world.bakeReason = "static material textures are still loading";
     return;
   }
   uint64_t signature = XXH3_64bits(lights.data(), lights.size() * sizeof(lights[0]));
