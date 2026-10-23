@@ -790,10 +790,10 @@ struct CullStatistics {
   uint32_t backFaces = 0, visibility = 0, twoSided = 0, skybox = 0, instances = 0;
 };
 
-// A water material's $normalmap, uploaded here from its file (the engine's
+// A water or Refract material's $normalmap, uploaded from its file (the engine's
 // own upload is of the frame its proxy shows now): every frame of its largest
 // mip, played through one dynamic texture at its AnimatedTexture rate.
-struct WaterNormal {
+struct SurfaceNormal {
   std::string name;
   float requestedFps = 0; // cache identity, including failed/static loads
   uint32_t width = 0, height = 0;
@@ -806,7 +806,7 @@ struct WaterNormal {
 
 struct World {
   const remixapi_Interface *api = nullptr;
-  std::vector<std::unique_ptr<WaterNormal>> waterNormals; // by water material, shared by name
+  std::vector<std::unique_ptr<SurfaceNormal>> surfaceNormals; // shared by source name and playback rate
   std::vector<remixapi_TextureHandle> opticalTints;
   std::string map;
   std::vector<Material> materials;
@@ -831,9 +831,9 @@ struct World {
   LayerStatistics layers;
   CullStatistics cull;
   std::unordered_map<std::string, int> overlayMaterialIndex;
-  uint32_t overlays = 0, overlayTriangles = 0, waterMaterials = 0, waterNormalCount = 0, waterAnimated = 0,
+  uint32_t overlays = 0, overlayTriangles = 0, waterMaterials = 0, surfaceNormalCount = 0, surfaceNormalAnimated = 0,
            waterDownFaces = 0;
-  std::string waterNormalFailure; // the last water normal map not loaded, and why
+  std::string surfaceNormalFailure; // last surface normal map load failure
   // Prop placements by 64-unit cell of their origin, for matching engine draws.
   std::unordered_map<uint64_t, std::vector<uint32_t>> propCells;
   std::map<std::array<int32_t, 6>, Group> groups;
@@ -1335,25 +1335,25 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   return nullptr;
 }
 
-// The texture of a water material's $normalmap (nullptr: none), made once per
+// The texture of a water or Refract material's $normalmap (nullptr: none), made once per
 // name and playback rate. fps: its AnimatedTexture rate (0: the first frame only, as Source
 // shows a $bumpframe nothing animates).
-WaterNormal *waterNormal(const std::string &name, float fps) {
+SurfaceNormal *surfaceNormal(const std::string &name, float fps) {
   // Nonpositive/invalid rates retain the existing nonanimated policy. Distinct
   // positive rates need distinct runtime textures: uploads mutate the texture.
   const float rate = std::isfinite(fps) && fps > 0 ? fps : 0;
-  for (auto &known : g_world.waterNormals)
+  for (auto &known : g_world.surfaceNormals)
     if (known->name == name && known->requestedFps == rate)
       return known->texture ? known.get() : nullptr;
-  auto normal = std::make_unique<WaterNormal>();
+  auto normal = std::make_unique<SurfaceNormal>();
   normal->name = name;
   normal->requestedFps = rate;
-  WaterNormal *made = normal.get();
-  g_world.waterNormals.push_back(std::move(normal));
+  SurfaceNormal *made = normal.get();
+  g_world.surfaceNormals.push_back(std::move(normal));
   std::vector<std::vector<uint8_t>> frames;
   const char *failure = g_world.api ? vtfFrames(name, made->width, made->height, frames) : "no runtime";
   if (failure || frames.empty()) {
-    g_world.waterNormalFailure = name + ": " + (failure ? failure : "no frames");
+    g_world.surfaceNormalFailure = name + ": " + (failure ? failure : "no frames");
     return nullptr;
   }
   const bool animated = frames.size() > 1 && rate > 0;
@@ -1379,25 +1379,25 @@ WaterNormal *waterNormal(const std::string &name, float fps) {
   info.dataSize = frames[0].size();
   if (g_world.api->CreateTexture(&info, &made->texture) != REMIXAPI_ERROR_CODE_SUCCESS) {
     made->texture = nullptr;
-    g_world.waterNormalFailure = name + ": the runtime refused its texture";
+    g_world.surfaceNormalFailure = name + ": the runtime refused its texture";
     return nullptr;
   }
-  ++g_world.waterNormalCount;
+  ++g_world.surfaceNormalCount;
   if (animated) {
     made->fps = rate;
     made->frames = std::move(frames);
-    ++g_world.waterAnimated;
+    ++g_world.surfaceNormalAnimated;
   }
   return made;
 }
 
-// Animated water normals show the frame of the time (submit, every frame).
-void animateWaterNormals() {
+// Animated surface normals show the frame of the time (submit, every frame).
+void animateSurfaceNormals() {
   static const auto update = reinterpret_cast<PFN_remixapi_UpdateTextureEXT>(
       reinterpret_cast<void *>(GetProcAddress(GetModuleHandleW(L"remix.dll"), "remixapi_UpdateTextureEXT")));
   static const ULONGLONG start = GetTickCount64();
   const double seconds = double(GetTickCount64() - start) / 1000;
-  for (auto &normal : g_world.waterNormals) {
+  for (auto &normal : g_world.surfaceNormals) {
     if (!update || !normal->texture || normal->frames.size() < 2)
       continue;
     const int frame = int(uint64_t(seconds * normal->fps) % normal->frames.size());
@@ -1460,9 +1460,9 @@ void loadRefract(const KeyValues &kv, const std::string &identity, Material &mat
   }
   wchar_t normalPath[32]{}, tintPath[32]{};
   if (!description.normalTexture.empty()) {
-    auto *normal = waterNormal(description.normalTexture, description.framesPerSecond);
+    auto *normal = surfaceNormal(description.normalTexture, description.framesPerSecond);
     if (!normal) {
-      material.importFailure = "Refract normal unavailable: " + g_world.waterNormalFailure;
+      material.importFailure = "Refract normal unavailable: " + g_world.surfaceNormalFailure;
       return;
     }
     swprintf(normalPath, 32, L"0x%llX", static_cast<unsigned long long>(normal->hash));
@@ -1586,8 +1586,8 @@ int materialByName(const std::string &name, bool brush) {
                                  ? float(std::atof(proxy("animatedtexture.animatedtextureframerate").c_str()))
                                  : 15.0f)
                           : 0.0f;
-    WaterNormal *normal = waterNormalsEnabled() && kv.values.count("$normalmap")
-                              ? waterNormal(lower(kv.values["$normalmap"]), fps)
+    SurfaceNormal *normal = waterNormalsEnabled() && kv.values.count("$normalmap")
+                              ? surfaceNormal(lower(kv.values["$normalmap"]), fps)
                               : nullptr;
     remixapi_MaterialNormalEncodingEXT encoding = {};
     encoding.sType = REMIXAPI_STRUCT_TYPE_MATERIAL_NORMAL_ENCODING_EXT;
@@ -1877,10 +1877,10 @@ void destroyMeshes() {
   for (auto &m : g_world.materials)
     if (m.owned && m.ref.handle && g_world.api)
       g_world.api->DestroyMaterial(m.ref.handle);
-  for (auto &normal : g_world.waterNormals)
+  for (auto &normal : g_world.surfaceNormals)
     if (normal->texture && g_world.api)
       g_world.api->DestroyTexture(normal->texture);
-  g_world.waterNormals.clear();
+  g_world.surfaceNormals.clear();
   for (auto tint : g_world.opticalTints)
     if (g_world.api)
       g_world.api->DestroyTexture(tint);
@@ -3561,7 +3561,7 @@ void submit(MaterialLookup lookup) {
     return;
   const auto &api = *g_world.api;
   const uint64_t frame = g_world.frames++;
-  animateWaterNormals();
+  animateSurfaceNormals();
   // Materials resolve once the engine has uploaded their textures (at map
   // load, as a rule): every frame at first, then twice a second.
   if (frame < 600 || frame % 30 == 0)
@@ -4139,15 +4139,15 @@ void dumpStatistics(FILE *out) {
           "   BSP world %s: faces %u displacements %u (sky %u) triangles %u | materials %u/%zu resolved | groups %zu "
           "(meshes %u) | left to the engine: translucent %u, ignored %u | rtx.conf-ignored brush materials kept %u | sky camera %d\n"
           "   BSP static props: %zu placements (%u in the 3D skybox), %zu models (%u failed), %u parts | overlays %u "
-          "(%u triangles, %zu groups) | water materials %u, with normal maps %u (animated %u; "
-          "OPENREMIX_PROXY_WATER_NORMALS), downward faces left out %u%s%s\n",
+          "(%u triangles, %zu groups) | water materials %u | surface normal textures %u (animated %u; "
+          "water optional via OPENREMIX_PROXY_WATER_NORMALS), water downward faces left out %u%s%s\n",
           g_world.map.c_str(), g_world.faces, g_world.displacements, g_world.skyFaces, g_world.triangles, resolved,
           g_world.materials.size(), g_world.groups.size(), meshes, g_world.skippedTranslucent, g_world.skippedIgnored, g_world.keptIgnored,
           int(g_world.skyCamera), g_world.props.size(), g_world.skyProps, g_world.propModels.size(),
           g_world.propModelsFailed, g_world.propParts, g_world.overlays, g_world.overlayTriangles,
-          g_world.overlayGroups.size(), g_world.waterMaterials, g_world.waterNormalCount, g_world.waterAnimated,
+          g_world.overlayGroups.size(), g_world.waterMaterials, g_world.surfaceNormalCount, g_world.surfaceNormalAnimated,
           g_world.waterDownFaces,
-          g_world.waterNormalFailure.empty() ? "" : " | not loaded: ", g_world.waterNormalFailure.c_str());
+          g_world.surfaceNormalFailure.empty() ? "" : " | not loaded: ", g_world.surfaceNormalFailure.c_str());
   {
     const auto &l = g_world.layers;
     uint32_t meshes = 0, waiting = 0;
