@@ -162,3 +162,17 @@ an authored projection, unique authored projection, or ambiguous projection orig
 material names and exceeded read budgets reject extraction. No association is guessed from a material
 filename. Compiled indices remain scoped to the fingerprinted BSP; these links do not define dynamic
 receiver influence or reflection blending.
+
+### Inspect published volumes against brush geometry
+
+From the repository root, `python tools/probe_bounds.py map.bsp probes.json section.png --slice -90`
+plots a world-space brush section and published probe bounds. Use `--axis x`, `--axis y` or the
+default `--axis z` to choose the slice plane, and repeat `--probe INDEX` to select volumes.
+`--window LEFT RIGHT BOTTOM TOP` zooms the two plotted world axes. `--receiver X Y Z` marks a
+world-space receiver projected onto the slice.
+
+Solid polygons show parallax projection bounds; dashed polygons show independent influence bounds
+when they differ. Both follow the published rigid transform, including translated and oblique boxes.
+The plot omits props, moving brushes and displacements: an open region in this diagram does not by
+itself establish visibility or reflection quality. Run `python tests/probe_bounds.py` for transform
+and section regression coverage.
