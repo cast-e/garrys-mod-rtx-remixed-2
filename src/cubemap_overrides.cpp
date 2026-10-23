@@ -77,12 +77,14 @@ namespace proxy::cubemaps {
       if (!ReadFile(input.handle, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size())
         throw std::runtime_error("Incomplete cubemap sidecar read");
       if (bytes == m_seen) return;
-      m_seen = bytes;
       const auto volumes = decode(bytes, m_map);
       const remixapi_ReflectionVolumesInfoEXT request{sizeof(request), REMIXAPI_REFLECTION_VOLUMES_VERSION_EXT,
           m_scene, ++m_revision, uint32_t(volumes.size()), 0, volumes.data()};
       const auto result = publish(&request);
       if (result != REMIXAPI_ERROR_CODE_SUCCESS) throw std::runtime_error("Native renderer refused cubemap bounds");
+      // Remember only accepted payloads: scene preparation can temporarily reject publication.
+      // The next poll must retry unchanged bytes rather than silently losing the edit.
+      m_seen = std::move(bytes);
       m_applied = true;
       m_error.clear();
       std::fprintf(stderr, "Authored cubemap bounds: %zu volumes, revision %llu\n", volumes.size(),

@@ -10,11 +10,13 @@ namespace {
   unsigned calls = 0, clears = 0, volumeCount = 0;
   uint64_t revision = 0;
   int32_t priority = 0;
+  bool refuseNext = false;
   void require(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
   remixapi_ErrorCode REMIXAPI_CALL publish(const remixapi_ReflectionVolumesInfoEXT *request) {
     if (!request) { ++clears; return REMIXAPI_ERROR_CODE_SUCCESS; }
     require(request->sceneId == 42 && request->volumeCount <= 1, "Watcher preserves scene scope and bounded count");
     ++calls; revision = request->revision; volumeCount = request->volumeCount;
+    if (refuseNext) { refuseNext = false; return REMIXAPI_ERROR_CODE_GENERAL_FAILURE; }
     if (volumeCount) priority = request->volumes[0].priority;
     return REMIXAPI_ERROR_CODE_SUCCESS;
   }
@@ -73,5 +75,14 @@ int main(int argc, char **argv) try {
   std::filesystem::remove(file);
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(clears == 1, "Removing the sidecar restores automatic cubemaps");
+  write();
+  refuseNext = true;
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 4, "A recreated sidecar reaches the renderer");
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 5 && revision == 5, "Unchanged bytes retry after renderer rejection");
+  std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
+  require(calls == 5, "Accepted retry stops redundant publication");
+  std::filesystem::remove(file);
   std::puts("Cubemap sidecar fingerprints, bounded decoding and live publication passed");
 } catch (const std::exception &error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }
