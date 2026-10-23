@@ -68,6 +68,8 @@ int main(int argc, char **argv) try {
   write();
   Watcher watcher; watcher.configure(map, 42, file); watcher.poll(publish);
   require(calls == 1 && revision == 1 && priority == -7, "Initial sidecar is published once");
+  require(watcher.accepted() && watcher.accepted()->volumes[0].priority == -7,
+          "Receiver lookup sees only a renderer-accepted document");
   volume.priority = 9; std::memcpy(bytes.data()+44, &volume, sizeof(volume)); write();
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 2 && revision == 2 && priority == 9, "Changed sidecars publish independently of bake membership");
@@ -76,6 +78,8 @@ int main(int argc, char **argv) try {
   bytes[8] ^= 1; write();
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 2 && clears == 0, "Invalid edits preserve the previously valid override");
+  require(watcher.accepted() && watcher.accepted()->volumes[0].priority == 9,
+          "Invalid input cannot replace accepted receiver identity metadata");
   bytes[8] ^= 1; // Restore the valid BSP fingerprint before publishing an empty authored set.
   bytes.resize(44);
   const uint32_t empty = 0; std::memcpy(bytes.data()+40, &empty, sizeof(empty)); write();
@@ -85,10 +89,12 @@ int main(int argc, char **argv) try {
   std::filesystem::remove(file);
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(clears == 1, "Removing the sidecar restores automatic cubemaps");
+  require(!watcher.accepted(), "Successful removal clears receiver identity metadata");
   write();
   refuseNext = true;
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 4, "A recreated sidecar reaches the renderer");
+  require(!watcher.accepted(), "Refused publication cannot activate receiver metadata");
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
   require(calls == 5 && revision == 5, "Unchanged bytes retry after renderer rejection");
   std::this_thread::sleep_for(std::chrono::milliseconds(510)); watcher.poll(publish);
@@ -118,6 +124,9 @@ int main(int argc, char **argv) try {
   require(calls == 7 && version == REMIXAPI_REFLECTION_VOLUMES_SAMPLING_VERSION_EXT &&
               influenceMinimum == -2 && blendDistance == .25f,
           "An unchanged version-two document retries and publishes independent sampling atomically");
+  require(watcher.accepted() && watcher.accepted()->independentSampling &&
+              watcher.accepted()->sampling[0].blendDistance == .25f,
+          "Accepted metadata retains version-two sampling without inventing influence bounds");
   std::filesystem::remove(file);
   std::puts("Cubemap sidecar fingerprints, bounded decoding and live publication passed");
 } catch (const std::exception &error) { std::fprintf(stderr, "%s\n", error.what()); return 1; }

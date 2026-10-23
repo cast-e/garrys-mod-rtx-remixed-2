@@ -57,6 +57,7 @@ namespace proxy::cubemaps {
     m_file = std::move(file);
     m_seen.clear();
     m_applied = false;
+    m_document = {};
     m_revision = 0;
     m_next = {};
   }
@@ -68,7 +69,10 @@ namespace proxy::cubemaps {
       const bool exists = std::filesystem::exists(m_file, error);
       if (error) throw std::runtime_error("Cannot inspect cubemap sidecar");
       if (!exists) {
-        if (m_applied && publish(nullptr) == REMIXAPI_ERROR_CODE_SUCCESS) m_applied = false;
+        if (m_applied && publish(nullptr) == REMIXAPI_ERROR_CODE_SUCCESS) {
+          m_applied = false;
+          m_document = {};
+        }
         m_seen.clear();
         return;
       }
@@ -87,7 +91,7 @@ namespace proxy::cubemaps {
       if (!ReadFile(input.handle, bytes.data(), DWORD(bytes.size()), &read, nullptr) || read != bytes.size())
         throw std::runtime_error("Incomplete cubemap sidecar read");
       if (bytes == m_seen) return;
-      const auto document = decode(bytes, m_map);
+      auto document = decode(bytes, m_map);
       const auto &volumes = document.volumes;
       const remixapi_ReflectionVolumesInfoEXT request{sizeof(request), REMIXAPI_REFLECTION_VOLUMES_VERSION_EXT,
           m_scene, ++m_revision, uint32_t(volumes.size()), 0, volumes.data()};
@@ -102,11 +106,12 @@ namespace proxy::cubemaps {
       // Remember only accepted payloads: scene preparation can temporarily reject publication.
       // The next poll must retry unchanged bytes rather than silently losing the edit.
       m_seen = std::move(bytes);
+      m_document = std::move(document);
       m_applied = true;
       m_error.clear();
-      std::fprintf(stderr, "Authored cubemap bounds: %zu volumes, revision %llu\n", volumes.size(),
+      std::fprintf(stderr, "Authored cubemap bounds: %zu volumes, revision %llu\n", m_document.volumes.size(),
                    static_cast<unsigned long long>(m_revision));
-      if (volumes.empty())
+      if (m_document.volumes.empty())
         std::fprintf(stderr, "Local cubemaps disabled by empty authored set; remove the sidecar to restore automatic placement\n");
     } catch (const std::exception &error) {
       if (m_error != error.what()) std::fprintf(stderr, "Authored cubemap bounds: %s\n", error.what());

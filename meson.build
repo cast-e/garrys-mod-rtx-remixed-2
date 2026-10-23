@@ -156,6 +156,11 @@ cubemap_overrides_test = executable('cubemap-overrides-test', 'tests/cubemap_ove
 test('Cubemap authoring sidecar fingerprint and live publication', cubemap_overrides_test,
   args: [meson.current_build_dir() / 'cubemap-overrides-readback'])
 
+cubemap_receivers_test = executable('cubemap-receivers-test', 'tests/cubemap_receivers.cpp',
+  include_directories: include_directories('src', remix_inc),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Explicit BSP material capture names and authored identity matching', cubemap_receivers_test)
+
 sky_mesh_clip_test = executable('sky-mesh-clip-test', 'tests/sky_mesh_clip.cpp',
   include_directories: include_directories('src', remix_inc),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])

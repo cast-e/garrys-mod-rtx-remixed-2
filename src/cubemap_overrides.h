@@ -17,11 +17,15 @@ namespace proxy::cubemaps {
   public:
     void configure(const std::vector<uint8_t> & map, uint64_t sceneId, std::filesystem::path file);
     void poll(PFN_remixapi_SetReflectionVolumesEXT publish);
+    // Render-thread view, valid until the next poll/configure. This records API
+    // acceptance, not completion of the renderer's asynchronous capture work.
+    const Document *accepted() const { return m_applied ? &m_document : nullptr; }
   private:
     Fingerprint m_map{};
     std::filesystem::path m_file;
     uint64_t m_scene = 0, m_revision = 0;
     bool m_applied = false;
+    Document m_document;
     std::string m_error;
     std::vector<uint8_t> m_seen;
     std::chrono::steady_clock::time_point m_next{};

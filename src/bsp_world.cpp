@@ -1,5 +1,6 @@
 #include "sky_mesh_clip.h"
 #include "cubemap_overrides.h"
+#include "cubemap_receivers.h"
 #include "source_lights.h"
 #include "bsp_world.h"
 #include "bake_charts.h"
@@ -666,6 +667,7 @@ pbr::Material materialPbr(KeyValues &kv) {
 // --- World geometry -----------------------------------------------------------
 struct Material {
   std::string name, baseTexture;
+  std::optional<cubemaps::CaptureOrigin> captureReference;
   std::vector<uint64_t> candidates; // texture hashes, largest mip first
   // Unlit or self-illuminated (materialShading), and its mask's hashes.
   engine_materials::Shading shading;
@@ -1534,7 +1536,12 @@ int materialByName(const std::string &name, bool brush) {
   Material m;
   m.name = name;
   KeyValues kv;
-  if (loadMaterial(m.name, kv) && kv.shader == "refract") {
+  const bool loaded = loadMaterial(m.name, kv);
+  if (loaded) {
+    const auto capture = kv.values.find("$envmap");
+    if (capture != kv.values.end()) m.captureReference = cubemaps::captureOrigin(capture->second, g_world.map);
+  }
+  if (loaded && kv.shader == "refract") {
     loadRefract(kv, cacheKey, m);
     slot = int(g_world.materials.size());
     g_world.materials.push_back(std::move(m));
@@ -4262,6 +4269,15 @@ void dumpStatistics(FILE *out) {
           g_world.skyboxLights, g_world.otherLights);
   fprintf(out, "   BSP authored reflection seeds: %zu (validated playable env_cubemap positions)\n",
           g_world.reflectionSeeds.size());
+  size_t captureReferences = 0, authoredMatches = 0;
+  for (const auto &material : g_world.materials) {
+    if (!material.captureReference) continue;
+    ++captureReferences;
+    if (const auto document = g_cubemapOverrides.accepted();
+        document && cubemaps::uniqueVolume(*material.captureReference, *document)) ++authoredMatches;
+  }
+  fprintf(out, "   BSP explicit material capture references: %zu; unique accepted-sidecar matches: %zu (not yet receiver bindings)\n",
+          captureReferences, authoredMatches);
   for (const auto &[key, model] : g_world.propModels)
     if (model.engineParts)
       fprintf(out, "     deferred prop transport: %s; %u additive camera-only parts; missing occluders %u\n",
