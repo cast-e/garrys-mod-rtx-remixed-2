@@ -98,6 +98,11 @@ readbacks can repeat across host frames, so use `gpuNew` for GPU timing summarie
 The appended `cpuStatus` and `bakeStatus` retain each statistics API return code.
 A failed query is unknown; zero-filled CPU/bake fields are not evidence of a zero-cost
 frame, absent lighting or a rebake.
+`gpuTruncated` reports omitted timing ranges. `probeGatherAvailable` distinguishes a
+recorded selected-probe visibility preparation range from ordinary reuse, and
+`probeGatherMs` records its inclusive GPU time. A missing range is not a measured
+zero-cost gather; reject unavailable or truncated observations before drawing that
+conclusion. As with other pass timers, neighbouring GPU stages can overlap.
 The profiler observes focus without changing it and performs no window/API calls
 or file writes when disabled. A forced process stop may leave a truncated final
 CSV record; discard that trailing fragment rather than treating it as a frame.

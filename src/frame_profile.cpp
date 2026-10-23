@@ -47,7 +47,8 @@ struct Recorder {
     std::fputs("unixMs,hostMs,presentStatus,cpuRecordMs,cpuFenceMs,gpuAvailable,gpuNew,gpuFrame,gpuMs,renderWidth,renderHeight,"
                "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,"
                "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash,"
-               "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight,cpuStatus,bakeStatus\n", file.get());
+               "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight,cpuStatus,bakeStatus,"
+               "gpuTruncated,probeGatherAvailable,probeGatherMs\n", file.get());
   }
 
   void sample(double hostMs, remixapi_ErrorCode presentStatus,
@@ -72,19 +73,24 @@ struct Recorder {
     remixapi_BakeStatisticsEXT lighting{};
     lighting.structSize = sizeof(lighting);
     const auto bakeStatus = bake ? bake(&lighting) : REMIXAPI_ERROR_CODE_GENERAL_FAILURE;
-    auto pass = [&](const char *name) {
+    auto findPass = [&](const char *name) -> const remixapi_GpuPassTimingEXT * {
       if (available)
         for (uint32_t i = 0; i < timings.passCount && i < REMIXAPI_GPU_PASS_TIMING_CAPACITY_EXT; ++i)
-          if (std::strcmp(timings.passes[i].name, name) == 0) return timings.passes[i].milliseconds;
-      return 0.0;
+          if (std::strcmp(timings.passes[i].name, name) == 0) return &timings.passes[i];
+      return nullptr;
     };
+    auto pass = [&](const char *name) {
+      const auto *range = findPass(name);
+      return range ? range->milliseconds : 0.0;
+    };
+    const auto *probeGather = findPass("Forward+ selected probe visibility gather");
     FILETIME now;
     GetSystemTimeAsFileTime(&now);
     const uint64_t ticks = (uint64_t(now.dwHighDateTime) << 32) | now.dwLowDateTime;
     const auto unixMs = (ticks - 116444736000000000ull) / 10000;
     const bool fresh = available && timings.frame != lastGpu;
     std::fprintf(file.get(), "%llu,%.6f,%u,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,"
-        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u\n",
+        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.6f\n",
         static_cast<unsigned long long>(unixMs), hostMs, unsigned(presentStatus), frame.recordMilliseconds, frame.fenceMilliseconds,
         unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
         timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
@@ -95,7 +101,8 @@ struct Recorder {
         pass("Forward+ viewmodel local self shadows"), lighting.state,
         static_cast<unsigned long long>(lighting.activeHash), unsigned(hostFocused), unsigned(processFocused),
         unsigned(windowStatus), unsigned(window.focused), unsigned(window.minimized),
-        window.drawableWidth, window.drawableHeight, unsigned(cpuStatus), unsigned(bakeStatus));
+        window.drawableWidth, window.drawableHeight, unsigned(cpuStatus), unsigned(bakeStatus),
+        timings.truncated, unsigned(probeGather != nullptr), probeGather ? probeGather->milliseconds : 0.0);
     if (available) lastGpu = timings.frame;
     if (++rows % 120 == 0) std::fflush(file.get());
   }
