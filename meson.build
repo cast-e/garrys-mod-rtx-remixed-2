@@ -47,6 +47,11 @@ bake_charts_test = executable('bsp-bake-charts-test', 'tests/bake_charts.cpp',
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
 test('BSP surface lightmap chart mapping', bake_charts_test)
 
+refract_material_test = executable('refract-material-test', 'tests/refract_material.cpp', 'src/refract_material.cpp',
+  include_directories: include_directories('src'),
+  link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
+test('Source Refract proxy binding and passive optical tint', refract_material_test)
+
 bake_materials_test = executable('bsp-bake-materials-test', 'tests/bake_materials.cpp',
   include_directories: include_directories('src'),
   link_args: ['-static', '-static-libgcc', '-static-libstdc++'])
