@@ -72,7 +72,7 @@ float g_modulationSample[4] = {}; // the last tinted draw's modulation colour (g
 
 struct Stats {
   std::atomic<uint32_t> draws{0}, accepted{0}, offTarget{0}, noPosition{0}, noData{0}, skinned{0}, badPrim{0},
-      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
+      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, bspBrushEntitiesDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
   std::atomic<uint32_t> setLightKept[4] = {};
   // Unlit and self-illuminated draws (engine_materials): by kind, and why some stayed lit.
   std::atomic<uint32_t> luaLitDraws{0}; // unlit Lua meshes lit as surfaces (onDraw)
@@ -3732,6 +3732,28 @@ void onDraw(const Draw &d) {
       std::lock_guard<std::mutex> lock(g_transientSampleLock);
       ++g_keptWorldTextures[baseTextureHash];
     }
+  } else if (!d.blend && !ps.dynamic && bsp::active() && d.primCount) {
+    // A func_lod brush, which the BSP world bakes (bsp::isBakedBrushEntity):
+    // its first triangle's corners are the baked faces' corners. (Static
+    // vertices like the world's; the index buffer is rebuilt per frame. A
+    // fading one is blended and stays: the baked copy is opaque.)
+    const float *corner[3] = {};
+    for (uint32_t k = 0; k < 3; ++k) {
+      const size_t at = size_t(d.startIndex + k) * (d.indices.is32 ? 4 : 2);
+      if (at + (d.indices.is32 ? 4 : 2) > d.indices.size)
+        break;
+      uint32_t index = 0;
+      std::memcpy(&index, d.indices.data + at, d.indices.is32 ? 4 : 2);
+      const int64_t vertex = int64_t(d.baseVertex) + index;
+      const size_t offset = size_t(ps.offset) + size_t(vertex) * ps.stride + pos->Offset;
+      if (vertex < 0 || offset + 12 > ps.size)
+        break;
+      corner[k] = reinterpret_cast<const float *>(ps.data + offset);
+    }
+    if (corner[2] && bsp::isBakedBrushEntity(corner[0], corner[1], corner[2])) {
+      ++g_stats.bspBrushEntitiesDropped;
+      return;
+    }
   }
 
   // What the Source material bound for this draw does with its texture
@@ -5831,8 +5853,9 @@ void dumpStatistics(FILE *out) {
   fprintf(out, "   world-list draws: dropped (BSP world) %.1f, kept blended %.1f, kept dynamic %.1f\n",
           g_stats.bspDropped.exchange(0) / f, g_stats.bspKeptBlended.exchange(0) / f,
           g_stats.bspKeptDynamic.exchange(0) / f);
-  fprintf(out, "   dropped for the BSP world: static prop draws %.1f, overlay draws %.1f\n",
-          g_stats.bspPropsDropped.exchange(0) / f, g_stats.bspOverlaysDropped.exchange(0) / f);
+  fprintf(out, "   dropped for the BSP world: static prop draws %.1f, overlay draws %.1f, func_lod draws %.1f\n",
+          g_stats.bspPropsDropped.exchange(0) / f, g_stats.bspOverlaysDropped.exchange(0) / f,
+          g_stats.bspBrushEntitiesDropped.exchange(0) / f);
   vb_origins::write(out, f);
   fprintf(out, "   Lua meshes lit as surfaces per frame: %.1f (OPENREMIX_PROXY_LUA_MESHES_LIT)\n",
           g_stats.luaLitDraws.exchange(0) / f);

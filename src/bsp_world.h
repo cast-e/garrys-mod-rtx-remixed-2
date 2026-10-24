@@ -58,6 +58,10 @@ void submit(MaterialLookup lookup);
 // to it from then on.
 bool isStaticProp(const float *modelRows, const float eye[3]);
 
+// Whether a triangle (model-space corners) lies on corners of the func_lod
+// brushes the BSP world bakes: the engine's draw of one, which goes.
+bool isBakedBrushEntity(const float *a, const float *b, const float *c);
+
 // A static light of the map, in the engine's LightDesc_t terms (type 1 point,
 // 2 directional, 3 spot; color in Source's linear intensity units).
 struct Light {

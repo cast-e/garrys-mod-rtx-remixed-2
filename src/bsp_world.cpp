@@ -21,6 +21,7 @@
 #include <cstring>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace proxy::bsp {
@@ -819,6 +820,12 @@ struct World {
   uint32_t recordings = 0;
   uint32_t styledLights = 0, skyboxLights = 0, otherLights = 0, surfaceLights = 0;
   uint32_t styleDrivenLights = 0; // of lights: scaled by their lightstyle
+  // func_lod brushes, baked like world faces (lodModels): the server stops
+  // sending one outside the player's PVS, and the engine no longer draws it
+  // although the camera (or a reflection) still sees it. The positions of
+  // their baked faces' corners identify the engine's draws of them.
+  std::unordered_set<uint64_t> lodCorners;
+  uint32_t lodEntities = 0, lodFaces = 0, lodLeft = 0;
 } g_world;
 bool g_active = false;
 
@@ -901,6 +908,46 @@ void parseSkyCamera(const Bsp &bsp) {
     }
     return;
   }
+}
+
+// func_lod brush models (indices into the models lump). One with an origin
+// or angles (a brush model placed away from where it was compiled) is left
+// to the engine.
+std::vector<int32_t> lodModels(const Bsp &bsp, size_t modelCount) {
+  std::vector<int32_t> out;
+  const auto [text, length] = bsp.lump<char>(kEntities);
+  if (!text)
+    return out;
+  const std::string entities(text, length);
+  for (size_t open = entities.find('{'); open != std::string::npos; open = entities.find('{', open + 1)) {
+    const size_t close = entities.find('}', open);
+    if (close == std::string::npos)
+      break;
+    KeyValues kv;
+    if (!parseKeyValues("entity " + entities.substr(open, close - open + 1), kv) ||
+        lower(kv.values["classname"]) != "func_lod")
+      continue;
+    const std::string &model = kv.values["model"];
+    const int index = model.size() > 1 && model[0] == '*' ? std::atoi(model.c_str() + 1) : 0;
+    float origin[3] = {}, angles[3] = {};
+    std::sscanf(kv.values["origin"].c_str(), "%f %f %f", &origin[0], &origin[1], &origin[2]);
+    std::sscanf(kv.values["angles"].c_str(), "%f %f %f", &angles[0], &angles[1], &angles[2]);
+    bool placed = false;
+    for (int k = 0; k < 3; ++k)
+      placed |= origin[k] != 0 || angles[k] != 0;
+    if (index <= 0 || size_t(index) >= modelCount || placed) {
+      ++g_world.lodLeft;
+      continue;
+    }
+    out.push_back(index);
+  }
+  return out;
+}
+
+// A corner position, to the eighth of a unit.
+uint64_t cornerKey(const float p[3]) {
+  const int32_t q[3] = {int32_t(std::lround(p[0] * 8)), int32_t(std::lround(p[1] * 8)), int32_t(std::lround(p[2] * 8))};
+  return XXH3_64bits(q, sizeof(q));
 }
 
 // Bounds-checked reads from a file image.
@@ -2383,7 +2430,20 @@ bool build(const Bsp &bsp) {
     return false;
   };
 
-  for (int32_t f = world.firstFace; f < world.firstFace + world.numFaces && size_t(f) < faceCount; ++f) {
+  // The world's faces, then those of the func_lod brushes.
+  std::vector<int32_t> faceList;
+  for (int32_t f = world.firstFace; f < world.firstFace + world.numFaces && size_t(f) < faceCount; ++f)
+    faceList.push_back(f);
+  const size_t worldFaces = faceList.size();
+  for (int32_t index : lodModels(bsp, modelCount)) {
+    ++g_world.lodEntities;
+    const Model &lod = models[index];
+    for (int32_t f = lod.firstFace; f < lod.firstFace + lod.numFaces && size_t(f) < faceCount; ++f)
+      faceList.push_back(f);
+  }
+  for (size_t listed = 0; listed < faceList.size(); ++listed) {
+    const int32_t f = faceList[listed];
+    const bool lodFace = listed >= worldFaces;
     const Face &face = faces[f];
     if (face.texInfo < 0 || size_t(face.texInfo) >= texInfoCount || face.numEdges < 3 ||
         size_t(face.plane) >= planeCount)
@@ -2424,6 +2484,11 @@ bool build(const Bsp &bsp) {
     }
     if (corners.size() != size_t(face.numEdges))
       continue;
+    if (lodFace) {
+      ++g_world.lodFaces;
+      for (const auto &c : corners)
+        g_world.lodCorners.insert(cornerKey(c.data()));
+    }
     // Which way the polygon winds seen from its front (twice its area along
     // the normal, negative: clockwise). The runtime takes a triangle's front
     // from its winding (clockwise seen from the front): a polygon wound the
@@ -3249,6 +3314,15 @@ int areaAt(const float p[3]) {
   return leaf >= 0 && size_t(leaf) < g_world.leafAreas.size() ? g_world.leafAreas[leaf] : -1;
 }
 
+bool isBakedBrushEntity(const float *a, const float *b, const float *c) {
+  if (!g_active || g_world.lodCorners.empty())
+    return false;
+  for (const float *p : {a, b, c})
+    if (!g_world.lodCorners.count(cornerKey(p)))
+      return false;
+  return true;
+}
+
 bool isStaticProp(const float *modelRows, const float eye[3]) {
   if (!g_active || g_world.props.empty())
     return false;
@@ -3451,13 +3525,13 @@ void dumpStatistics(FILE *out) {
           "   BSP world %s: faces %u displacements %u (sky %u) triangles %u | materials %u/%zu resolved | groups %zu "
           "(meshes %u) | left to the engine: translucent %u, ignored %u | rtx.conf-ignored brush materials kept %u | sky camera %d\n"
           "   BSP static props: %zu placements (%u in the 3D skybox left to the engine), %zu models (%u failed), %u parts | overlays %u "
-          "(%u triangles, %zu groups) | water materials %u, with normal maps %u (animated %u; "
+          "(%u triangles, %zu groups) | func_lod brushes %u (%u faces; left to the engine %u) | water materials %u, with normal maps %u (animated %u; "
           "OPENREMIX_PROXY_WATER_NORMALS), downward faces left out %u%s%s\n",
           g_world.map.c_str(), g_world.faces, g_world.displacements, g_world.skyFaces, g_world.triangles, resolved,
           g_world.materials.size(), g_world.groups.size(), meshes, g_world.skippedTranslucent, g_world.skippedIgnored, g_world.keptIgnored,
           int(g_world.skyCamera), g_world.props.size(), g_world.skyProps, g_world.propModels.size(),
           g_world.propModelsFailed, g_world.propParts, g_world.overlays, g_world.overlayTriangles,
-          g_world.overlayGroups.size(), g_world.waterMaterials, g_world.waterNormalCount, g_world.waterAnimated,
+          g_world.overlayGroups.size(), g_world.lodEntities, g_world.lodFaces, g_world.lodLeft, g_world.waterMaterials, g_world.waterNormalCount, g_world.waterAnimated,
           g_world.waterDownFaces,
           g_world.waterNormalFailure.empty() ? "" : " | not loaded: ", g_world.waterNormalFailure.c_str());
   {
