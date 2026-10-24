@@ -223,6 +223,15 @@ file accepts `key = value` lines (and `#` comments):
 bsp-replay.exe runtime/remix.dll "E:/SteamLibrary/steamapps/common/GarrysMod" gm_flatgrass output.png 1800
 ```
 
+To exercise map transitions without restarting the renderer, provide the first
+stage's frame budget and settings file, then append up to seven triples of
+`map output.png settings.cfg`. Each stage unloads its BSP, lights, materials and sky
+before the next load; the window and runtime stay alive. Outputs must be distinct.
+The same frame budget applies to each stage. Runtime configuration carries between
+stages, so each settings file should explicitly set the options under comparison.
+Each stage retains its normal readiness, capture and diagnostic checks; this is a
+static relay transition test, not live engine `changelevel` or gameplay timing.
+
 Keep the runtime filename `remix.dll`: the production BSP adapter resolves
 optional extensions by that module name. For comparison builds, use separate
 directories rather than renaming the DLL; replay rejects renamed runtimes.

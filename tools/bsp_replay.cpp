@@ -684,9 +684,10 @@ LRESULT CALLBACK replayWindowProcedure(HWND window, UINT message, WPARAM wparam,
 } // namespace
 
 int main(int argc, char **argv) {
-  if (argc < 5) {
+  if (argc < 5 || (argc > 7 && ((argc - 7) % 3 || argc > 28))) {
     std::fprintf(stderr,
-                 "Usage: bsp-replay path/to/remix.dll content-root map output.png [frames=600] [settings.cfg]\n");
+                 "Usage: bsp-replay path/to/remix.dll content-root map output.png [frames=600] [settings.cfg]\n"
+                 "       Optional: append up to seven (map output.png settings.cfg) stages in the same renderer\n");
     return 2;
   }
   SetEnvironmentVariableA("OPENREMIX_PROXY_CONTENT_ROOT", argv[2]);
@@ -711,10 +712,28 @@ int main(int argc, char **argv) {
   remixapi_Interface api = {};
   remixapi_HMODULE library = nullptr;
   int result = 0;
-  // The screenshot API requires absolute destinations, including the camera
-  // path captures derived from this filename. Resolve once for every output.
-  const auto output = std::filesystem::absolute(argv[4]).string();
-  const auto previousScreenshot = lastWrite(output);
+  struct Stage {
+    const char *map, *settings;
+    std::string output;
+    std::filesystem::file_time_type previous;
+  };
+  std::vector<Stage> stages;
+  auto appendStage = [&](const char *map, const char *output, const char *settings) {
+    const auto absolute = std::filesystem::absolute(output).lexically_normal().string();
+    stages.push_back({map, settings, absolute, lastWrite(absolute)});
+  };
+  appendStage(argv[3], argv[4], argc > 6 ? argv[6] : nullptr);
+  for (int i = 7; i < argc; i += 3)
+    appendStage(argv[i], argv[i + 1], argv[i + 2]);
+  for (size_t i = 0; i < stages.size(); ++i) {
+    for (size_t j = 0; j < i; ++j) {
+      if (_stricmp(stages[i].output.c_str(), stages[j].output.c_str()) == 0) {
+        std::fprintf(stderr, "Replay stages need distinct screenshot destinations\n");
+        DestroyWindow(window);
+        return 2;
+      }
+    }
+  }
   try {
     check(remixapi_lib_loadRemixDllAndInitialize(path.c_str(), &api, &library), "Load runtime");
     remixapi_StartupInfo startup = {};
@@ -726,39 +745,46 @@ int main(int argc, char **argv) {
     proxy::source_rendering::lightingDefaults([&](const char *key, const char *value) {
       check(api.SetConfigVariable(key, value), "Set Source lighting defaults");
     });
-    const auto settings = argc > 6 ? proxy::replay::configure(api, argv[6]) : proxy::replay::Settings{};
-    if (!settings.mods.empty()) {
-      const auto configure = reinterpret_cast<decltype(&remixapi_ConfigureUSDModsEXT)>(
-          GetProcAddress(library, "remixapi_ConfigureUSDModsEXT"));
-      if (!configure) throw std::runtime_error("Runtime lacks USD mod loading");
-      remixapi_USDModsOptionsEXT mods{};
-      mods.structSize = sizeof(mods); mods.version = 1; mods.directory = settings.mods.c_str();
-      mods.hostMetersPerUnit = .01; mods.hostUpAxis = 2; mods.watch = 0;
-      check(configure(&mods), "Configure USD mods");
+    for (size_t i = 0; i < stages.size(); ++i) {
+      const auto &stage = stages[i];
+      std::printf("Replay stage %zu/%zu: %s\n", i + 1, stages.size(), stage.map);
+      const auto settings = stage.settings ? proxy::replay::configure(api, stage.settings) : proxy::replay::Settings{};
+      if (!settings.mods.empty()) {
+        const auto configure = reinterpret_cast<decltype(&remixapi_ConfigureUSDModsEXT)>(
+            GetProcAddress(library, "remixapi_ConfigureUSDModsEXT"));
+        if (!configure) throw std::runtime_error("Runtime lacks USD mod loading");
+        remixapi_USDModsOptionsEXT mods{};
+        mods.structSize = sizeof(mods); mods.version = 1; mods.directory = settings.mods.c_str();
+        mods.hostMetersPerUnit = .01; mods.hostUpAxis = 2; mods.watch = 0;
+        check(configure(&mods), "Configure USD mods");
+      }
+      RECT bounds{0, 0, LONG(settings.width), LONG(settings.height)};
+      if (!AdjustWindowRect(&bounds, WS_OVERLAPPEDWINDOW, FALSE) ||
+          !SetWindowPos(window, nullptr, 0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top,
+                        SWP_NOMOVE | SWP_NOZORDER))
+        throw std::runtime_error("Cannot size replay window");
+      RECT client{};
+      if (!GetClientRect(window, &client) || client.right != LONG(settings.width) ||
+          client.bottom != LONG(settings.height))
+        throw std::runtime_error("Replay client size differs from requested resolution: " +
+                                 std::to_string(client.right) + "x" + std::to_string(client.bottom));
+      ShowWindow(window, SW_SHOWNOACTIVATE);
+      std::printf("Replay target %u x %u\n", settings.width, settings.height);
+      replay(api, library, window, stage.map, stage.output.c_str(), argc > 5 ? std::max(4, std::atoi(argv[5])) : 600,
+             settings);
+      std::printf("Replay stage %zu/%zu complete: %s\n", i + 1, stages.size(), stage.map);
     }
-    RECT bounds{0, 0, LONG(settings.width), LONG(settings.height)};
-    if (!AdjustWindowRect(&bounds, WS_OVERLAPPEDWINDOW, FALSE) ||
-        !SetWindowPos(window, nullptr, 0, 0, bounds.right - bounds.left, bounds.bottom - bounds.top,
-                      SWP_NOMOVE | SWP_NOZORDER))
-      throw std::runtime_error("Cannot size replay window");
-    RECT client{};
-    if (!GetClientRect(window, &client) || client.right != LONG(settings.width) ||
-        client.bottom != LONG(settings.height))
-      throw std::runtime_error("Replay client size differs from requested resolution: " +
-                               std::to_string(client.right) + "x" + std::to_string(client.bottom));
-    ShowWindow(window, SW_SHOWNOACTIVATE);
-    std::printf("Replay target %u x %u\n", settings.width, settings.height);
-    replay(api, library, window, argv[3], output.c_str(), argc > 5 ? std::max(4, std::atoi(argv[5])) : 600,
-           settings);
   } catch (const std::exception &error) {
     std::fprintf(stderr, "%s\n", error.what());
     result = 1;
   }
   if (library)
     remixapi_lib_shutdownAndUnloadRemixDll(&api, library);
-  if (!result && lastWrite(output) == previousScreenshot) {
-    std::fprintf(stderr, "Replay produced no screenshot\n");
-    result = 1;
+  for (const auto &stage : stages) {
+    if (!result && lastWrite(stage.output) == stage.previous) {
+      std::fprintf(stderr, "Replay produced no screenshot: %s\n", stage.output.c_str());
+      result = 1;
+    }
   }
   DestroyWindow(window);
   return result;
