@@ -221,6 +221,15 @@ std::string lower(std::string s) {
   return s;
 }
 
+// A material's texture file. Source drops an extension the VMT spells out
+// ("$basetexture" "models/props_mvm/sack_flat.vtf").
+std::string vtfPath(const std::string &name) {
+  std::string path = lower(name);
+  if (path.size() > 4 && path.compare(path.size() - 4, 4, ".vtf") == 0)
+    path.resize(path.size() - 4);
+  return "materials/" + path + ".vtf";
+}
+
 bool parseKeyValues(const std::string &text, KeyValues &out) {
   std::vector<std::string> tokens;
   for (size_t i = 0; i < text.size();) {
@@ -369,6 +378,7 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine) {
   case 20: // DXT1_ONEBITALPHA
     blockBytes = 8;
     break;
+  case 14: // DXT3
   case 15: // DXT5
     blockBytes = 16;
     break;
@@ -420,7 +430,7 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine) {
 // Of the index's copy and, when the engine has a different one (a workshop
 // addon replacing a stock texture), of that as well.
 std::vector<uint64_t> textureHashes(const std::string &name) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = vtfPath(name);
   std::vector<uint64_t> hashes = textureHashes(path, false);
   for (uint64_t hash : textureHashes(path, true))
     if (std::find(hashes.begin(), hashes.end(), hash) == hashes.end())
@@ -433,7 +443,7 @@ std::vector<uint64_t> textureHashes(const std::string &name) {
 bool textureHasAlpha(const std::string &name) {
   std::vector<uint8_t> header;
   uint32_t flags = 0;
-  if (!fs::read("materials/" + lower(name) + ".vtf", header, 0, 64) || header.size() < 24 ||
+  if (!fs::read(vtfPath(name), header, 0, 64) || header.size() < 24 ||
       std::memcmp(header.data(), "VTF", 4) != 0)
     return false;
   std::memcpy(&flags, header.data() + 20, 4);
@@ -444,7 +454,7 @@ bool textureHasAlpha(const std::string &name) {
 // the whole image of one without mips. False for a missing file or a format
 // not read here.
 bool textureMean(const std::string &name, float rgba[4]) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = vtfPath(name);
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total) || !fs::read(path, header, 0, 80) || header.size() < 64 ||
@@ -468,7 +478,7 @@ bool textureMean(const std::string &name, float rgba[4]) {
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
   case 16: pixelBytes = 4; order[0] = 2; order[2] = 0; order[3] = -1; break; // BGRX8888
   case 13: case 20: blockBytes = 8; break;                                   // DXT1
-  case 15: blockBytes = 16; break;                                           // DXT5
+  case 14: case 15: blockBytes = 16; break;                                   // DXT3, DXT5
   default: return false;
   }
   if (!width || !height || mips > 16)
@@ -489,7 +499,9 @@ bool textureMean(const std::string &name, float rgba[4]) {
       level.size() != bytesOf(last))
     return false;
   if (blockBytes) {
-    level = blockBytes == 8 ? formats::decodeBC1(level.data(), w, h) : formats::decodeBC3(level.data(), w, h);
+    level = blockBytes == 8 ? formats::decodeBC1(level.data(), w, h)
+            : format == 14  ? formats::decodeBC2(level.data(), w, h)
+                            : formats::decodeBC3(level.data(), w, h);
     pixelBytes = 4;
   }
   double sum[4] = {};
@@ -1181,7 +1193,7 @@ bool waterNormalsEnabled() {
 // most 64 MB of them. Else why not: a missing file, a format not read here.
 const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height,
                       std::vector<std::vector<uint8_t>> &out) {
-  const std::string path = "materials/" + lower(name) + ".vtf";
+  const std::string path = vtfPath(name);
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total))
@@ -1206,7 +1218,7 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
   case 16: pixelBytes = 4; order[0] = 2; order[2] = 0; order[3] = -1; break; // BGRX8888
   case 13: case 20: blockBytes = 8; break;                                   // DXT1
-  case 15: blockBytes = 16; break;                                           // DXT5
+  case 14: case 15: blockBytes = 16; break;                                   // DXT3, DXT5
   default: return "a format not read here";
   }
   const uint64_t level = blockBytes ? uint64_t((w + 3) / 4) * ((h + 3) / 4) * blockBytes : uint64_t(w) * h * pixelBytes;
@@ -1222,7 +1234,9 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   for (uint32_t f = 0; f < frames; ++f) {
     const uint8_t *src = data.data() + level * f * faces;
     if (blockBytes) {
-      out.push_back(blockBytes == 8 ? formats::decodeBC1(src, w, h) : formats::decodeBC3(src, w, h));
+      out.push_back(blockBytes == 8 ? formats::decodeBC1(src, w, h)
+                    : format == 14  ? formats::decodeBC2(src, w, h)
+                                    : formats::decodeBC3(src, w, h));
       continue;
     }
     std::vector<uint8_t> rgba(size_t(w) * h * 4);
@@ -3510,7 +3524,7 @@ void dumpStatistics(FILE *out) {
         std::string base = loadMaterial(m.name, kv) && kv.values.count("$basetexture") ? kv.values["$basetexture"] : "-";
         std::vector<uint8_t> header;
         int32_t format = -1;
-        if (base != "-" && fs::read("materials/" + lower(base) + ".vtf", header, 0, 64) && header.size() >= 56)
+        if (base != "-" && fs::read(vtfPath(base), header, 0, 64) && header.size() >= 56)
           std::memcpy(&format, header.data() + 52, 4);
         examples += "      " + m.name + " (" + kv.shader + ", $basetexture " + base + ", vtf format " +
                     std::to_string(format) + (m.candidates.empty() ? ", no hash" : ", not uploaded") + ")\n";

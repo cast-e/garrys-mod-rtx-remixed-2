@@ -5371,6 +5371,7 @@ bool textureLayout(D3DFORMAT format, uint32_t width, uint32_t height, remixapi_F
     rowBytes = blocksW * 8;
     rows = blocksH;
     break;
+  case D3DFMT_DXT3: // transcoded to BC3 (formats::transcodeBC2toBC3)
   case D3DFMT_DXT5:
     remixFormat = REMIXAPI_FORMAT_BC3_SRGB;
     rowBytes = blocksW * 16;
@@ -5506,6 +5507,8 @@ void onTextureUpload(const void *texture, uint32_t width, uint32_t height, D3DFO
   const uint64_t contentHash = dxvk::textureHash(pixels.data(), pixels.size());
   const uint64_t legacyHash = dxvk::legacyTextureHash(pixels.data(), pixels.size());
   noteReplacementKey(contentHash, 'T');
+  if (format == D3DFMT_DXT3)
+    formats::transcodeBC2toBC3(pixels.data(), pixels.size());
   // The X bytes are whatever the engine's conversion left there (unwritten
   // memory for some textures): a texture is also found by its hash with X
   // 0xff, which a file's pixels predict (bsp_world textureHashes).
@@ -5559,6 +5562,8 @@ void onTextureLevel(const void *texture, uint32_t level, uint32_t width, uint32_
     return;
   std::vector<uint8_t> pixels = packLevel(data, pitch, rowBytes, rows);
   ++g_textureLevelsSeen;
+  if (format == D3DFMT_DXT3)
+    formats::transcodeBC2toBC3(pixels.data(), pixels.size());
   if (format == D3DFMT_X8R8G8B8)
     for (size_t i = 3; i < pixels.size(); i += 4)
       pixels[i] = 0xff;
