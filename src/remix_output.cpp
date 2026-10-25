@@ -1618,8 +1618,8 @@ void captureUi(const Draw &d) {
     for (int k = 0; k < 4; ++k)
       clip[k] = p[0] * mvp[k * 4] + p[1] * mvp[k * 4 + 1] + p[2] * mvp[k * 4 + 2] + mvp[k * 4 + 3];
     const float w = std::fabs(clip[3]) > 1e-6f ? clip[3] : 1.0f;
-    out.x = (clip[0] / w * 0.5f + 0.5f) * g_displayWidth;
-    out.y = (0.5f - clip[1] / w * 0.5f) * g_displayHeight;
+    out.x = (clip[0] / w * 0.5f + 0.5f) * g_displayWidth + 0.5f;
+    out.y = (0.5f - clip[1] / w * 0.5f) * g_displayHeight + 0.5f;
     if (tex && tex->Type >= D3DDECLTYPE_FLOAT2 && tex->Type <= D3DDECLTYPE_FLOAT4)
       if (const uint8_t *t = fetch(tex, v, 8)) {
         std::memcpy(&out.u, t, 4);
