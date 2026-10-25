@@ -291,9 +291,11 @@ Sky tint is applied in linear light before dome sampling; this is not engine mat
 
 For image-quality studies, start from `tools/replay_quality.cfg`, add a fixed camera and
 asset/mod paths, and record exposure, SSR and sky-reference settings explicitly. This uses the
-runtime's normal 256-sample, three-bounce transport and 32768-probe budget. A cheap smoke-test
-configuration is not a quality reference: sparse probes can leak direct sun, and one-bounce
-cubemap transport can miss indirect ceiling illumination even at higher face resolution.
+runtime's normal 256-sample, three-bounce transport and 32768-probe budget. The preset also
+enables static mesh lightmaps, matching the current runtime default; dynamic objects retain
+probe lighting. A cheap smoke-test configuration is not a quality reference: sparse probes can
+leak direct sun, and one-bounce cubemap transport can miss indirect ceiling illumination even at
+higher face resolution.
 Separate transport convergence from resolution, parallax and material-response changes. Verify
 final readiness, actual probe density and completed authored captures before comparing images.
 The preset does not disable Reflex; offline validation with the older layer needs the explicit
