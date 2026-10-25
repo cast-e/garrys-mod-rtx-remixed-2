@@ -97,10 +97,6 @@ bool isStaticProp(const float *modelRows, const float eye[3]);
 // Whether a triangle (model-space corners) lies on corners of the func_lod
 // brushes the BSP world bakes: the engine's draw of one, which goes.
 bool isBakedBrushEntity(const float *a, const float *b, const float *c);
-// Opt-in receiver-only brush relay. Exact oriented local triangles and the
-// authored pose identify a material part; unknown/moved geometry stays live.
-bool brushReceiverPose(const float *rows);
-uint64_t brushReceiverIdentity(const float *rows, const std::vector<std::array<float, 3>> &corners);
 
 // A static light of the map, in the engine's LightDesc_t terms (type 1 point,
 // 2 directional, 3 spot, internal 4 surface; color in Source intensity units).

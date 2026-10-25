@@ -996,7 +996,6 @@ struct Instance {
   bool persistent;          // mesh from static buffers (cached across frames)
   bool singleSided = false; // blended draw D3D culls: its back faces are not seen
   bool cameraCullBack = false; // D3D culls its back faces: hidden from the camera only
-  uint64_t brushReceiver = 0; // authored receiver identity, independent of transient index buffers
   std::vector<remixapi_Transform> bones; // skinned instances
   float transform[3][4];
   uint64_t view;
@@ -1659,40 +1658,6 @@ bool g_hueColors = false;
 // the positions and normals (flexScale). `eyeProjection`: the Eyes shader's
 // two iris projection registers; the texture coordinates are then that
 // projection of the skinned position instead of the vertex buffer's.
-uint64_t brushReceiverIdentity(const Draw &draw, const float *pose) {
-  if (!bsp::brushReceiverPose(pose) || !draw.indices.data || !draw.primCount || draw.primCount > 65536 ||
-      (draw.type != D3DPT_TRIANGLELIST && draw.type != D3DPT_TRIANGLESTRIP)) return 0;
-  const auto *position = findElement(draw.elements, D3DDECLUSAGE_POSITION, 0);
-  if (!position || position->Type != D3DDECLTYPE_FLOAT3 || position->Stream >= 4) return 0;
-  const auto &stream = draw.streams[position->Stream];
-  if (!stream.data || !stream.stride) return 0;
-  std::vector<std::array<float, 3>> corners;
-  corners.reserve(size_t(draw.primCount) * 3);
-  const uint32_t bytes = draw.indices.is32 ? 4 : 2;
-  for (uint32_t triangle = 0; triangle < draw.primCount; ++triangle) {
-    std::array<uint32_t, 3> indices{};
-    for (uint32_t corner = 0; corner < 3; ++corner) {
-      const uint64_t selected = draw.type == D3DPT_TRIANGLELIST ? uint64_t(triangle) * 3 + corner : triangle + corner;
-      const uint64_t address = (uint64_t(draw.startIndex) + selected) * bytes;
-      if (address > draw.indices.size || bytes > draw.indices.size - address) return 0;
-      std::memcpy(&indices[corner], draw.indices.data + address, bytes);
-      if (indices[corner] < draw.minIndex || indices[corner] - draw.minIndex >= draw.numVertices) return 0;
-    }
-    if (indices[0] == indices[1] || indices[1] == indices[2] || indices[2] == indices[0]) continue;
-    if (draw.type == D3DPT_TRIANGLESTRIP && triangle % 2) std::swap(indices[0], indices[1]);
-    for (const auto index : indices) {
-      const int64_t vertex = int64_t(draw.baseVertex) + index;
-      if (vertex < 0) return 0;
-      const uint64_t address = uint64_t(stream.offset) + uint64_t(vertex) * stream.stride + position->Offset;
-      if (address > stream.size || 12 > stream.size - address) return 0;
-      std::array<float, 3> point;
-      std::memcpy(point.data(), stream.data + address, 12);
-      corners.push_back(point);
-    }
-  }
-  return bsp::brushReceiverIdentity(pose, corners);
-}
-
 // `refresh`: new vertices for the mesh already registered under `hash`
 // (g_flexMeshes), or a plain create when there is none. `eyeScale`: the
 // projected coordinates are scaled by it about the texture's centre.
@@ -4219,9 +4184,6 @@ void onDraw(const Draw &d) {
                          REMIXAPI_INSTANCE_CATEGORY_BIT_DECAL_SINGLE_OFFSET);
     ++g_stats.wireframeDraws;
   }
-  if (!bonesPerVertex && !lifted && flex == 0 && !d.blend && !inst.categories &&
-      particle == kNotParticle && !inst.rasterOnly && inst.stencilGroup < 0)
-    inst.brushReceiver = brushReceiverIdentity(d, &inst.transform[0][0]);
   g_instances.push_back(inst);
   // Eyes (Source's Eyes shader; not EyeRefract): the draw above is the eyeball
   // with its sclera texture, sampler 0. The iris and pupil are a second
@@ -4924,16 +4886,12 @@ void onPresent() {
       return id;
     };
     std::unordered_map<uint64_t, bool> seen; // multipass draws: the first pass wins
-    std::unordered_map<uint64_t, std::unordered_set<remixapi_MeshHandle>> receiverMeshes;
     // A path-traced 3D skybox comes from the BSP: the sky view's draws repeat it.
     const bool skyTraced = bsp::skyTracedReach() > 0;
-    for (const auto &inst : g_instances) {
-      if (inst.brushReceiver && roles[inst.view] == Role::Main)
-        receiverMeshes[inst.brushReceiver].insert(inst.mesh);
+    for (const auto &inst : g_instances)
       if (inst.stencilRole == kStencilInside && inst.depthTest && roles[inst.view] == Role::ViewModel &&
           g_stencilGroups[inst.stencilGroup].glassSources)
         g_stencilGroups[inst.stencilGroup].throughGlass = true;
-    }
     for (auto &inst : g_instances) {
       const Role role = roles[inst.view];
       if (role == Role::Skip)
@@ -5073,11 +5031,7 @@ void onPresent() {
       // blend state instead.
       // Particles likewise, whatever their blend mode (see submitParticles).
       const bool isAdditive = (inst.blend.alphaBlendEnabled && inst.blend.dstColorBlendFactor == 1) || inst.rasterOnly;
-      // A material part split into distinct draws needs a separate ownership
-      // scheme. Until then preserve every original draw through probe fallback.
-      const bool isReceiver = role == Role::Main && inst.brushReceiver && !isAdditive &&
-                              receiverMeshes[inst.brushReceiver].size() == 1;
-      const bool isTracked = !isStatic && !isAdditive && !isReceiver && inst.persistent && role != Role::Sky;
+      const bool isTracked = !isStatic && !isAdditive && inst.persistent && role != Role::Sky;
       if (isAdditive) {
         identity.instanceId = 0;
         identity.classification = REMIXAPI_INSTANCE_RASTER_ONLY_EXT;
@@ -5090,13 +5044,9 @@ void onPresent() {
         identity.instanceId = trackedId(group, position);
         identity.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT;
       }
-      if (isReceiver) {
-        identity.instanceId = inst.brushReceiver;
-        identity.classification = REMIXAPI_INSTANCE_DYNAMIC_EXT; // live caster policy is independent of its chart
-      }
       remixapi_InstanceInfo info = {};
       info.sType = REMIXAPI_STRUCT_TYPE_INSTANCE_INFO;
-      info.pNext = (isStatic || isTracked || isAdditive || isReceiver) ? static_cast<void *>(&identity)
+      info.pNext = (isStatic || isTracked || isAdditive) ? static_cast<void *>(&identity)
                    : inst.replacementHash ? static_cast<void *>(&replacement)
                                           : static_cast<void *>(&blend);
       info.mesh = inst.mesh;
