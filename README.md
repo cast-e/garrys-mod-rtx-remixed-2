@@ -311,6 +311,9 @@ modifying it, and uses it for the visible and baked sky. Invalid explicit refere
 fail the run. `OPENREMIX_PROXY_SKY_DOME_SCALE` defaults to 1 and must match the
 reference's recorded scale. Without a usable sky, the replay prints a lighting
 fidelity warning; the background fallback is not an in-game lighting reference.
+The quality preset sets `replay.requireSky=1`, so a missing sky fails before
+rendering or baking instead of producing a misleading quality capture. Quick
+diagnostic runs retain the default `replay.requireSky=0` fallback.
 
 Merged 3D-skybox props are clipped by triangle against playable BSP regions,
 like the merged sky world geometry. Testing only a prop's origin cannot prevent

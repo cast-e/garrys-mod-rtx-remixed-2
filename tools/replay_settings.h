@@ -29,6 +29,7 @@ struct Settings {
   float warmupSeconds = 3;
   uint32_t denoiseFrameDelayMs = 0; // diagnostic: reduce rendering contention only during lightmap denoising
   bool waitForBake = true;
+  bool requireSky = false; // quality references must not silently omit sky illumination
   bool styledLights = false; // explicit diagnostic authored-style playback
   float lightStyleValue = 1; // multiplier for all styled lights in the diagnostic snapshot
   bool freezeAnimation = false; // explicit frame-zero material snapshots, not engine playback

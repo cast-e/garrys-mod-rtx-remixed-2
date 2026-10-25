@@ -153,6 +153,11 @@ int main() {
   refuse("replay.measureFrames=10001");
   refuse("replay.warmupFrames=0");
   refuse("replay.waitForBake=2");
+  require(!parse("").requireSky && parse("replay.requireSky=1").requireSky &&
+              !parse("replay.requireSky=0").requireSky,
+          "Quality sky requirements are explicit and stay in the replay host");
+  refuse("replay.requireSky=2");
+  refuse("replay.requireSky=-1");
   require(parse("replay.denoiseFrameDelayMs=50").denoiseFrameDelayMs == 50 &&
               parse("replay.denoiseFrameDelayMs=1000").denoiseFrameDelayMs == 1000 &&
               parse("").denoiseFrameDelayMs == 0,

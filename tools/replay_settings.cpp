@@ -117,13 +117,13 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           settings.height = dimension;
       } else if (key == "replay.measureFrames" || key == "replay.warmupFrames" ||
                  key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ||
-                 key == "replay.receiversFollowCamera" ||
+                 key == "replay.receiversFollowCamera" || key == "replay.requireSky" ||
                  key == "replay.denoiseFrameDelayMs") {
         uint32_t number = 0;
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
         const uint32_t maximum = key == "replay.denoiseFrameDelayMs" ? 1000 :
             key == "replay.waitForBake" || key == "replay.freezeAnimation" || key == "replay.styledLights" ||
-            key == "replay.receiversFollowCamera" ? 1 : 10000;
+            key == "replay.receiversFollowCamera" || key == "replay.requireSky" ? 1 : 10000;
         if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || number > maximum ||
             (key == "replay.warmupFrames" && number < 16))
           throw std::runtime_error("Invalid measurement setting: " + key);
@@ -133,6 +133,8 @@ Settings configure(remixapi_Interface &api, const std::string &path) {
           settings.warmupFrames = number;
         else if (key == "replay.waitForBake")
           settings.waitForBake = number != 0;
+        else if (key == "replay.requireSky")
+          settings.requireSky = number != 0;
         else if (key == "replay.styledLights")
           settings.styledLights = number != 0;
         else if (key == "replay.receiversFollowCamera")

@@ -316,6 +316,9 @@ void replay(remixapi_Interface &api, HMODULE library, HWND window, const char *m
   if (!proxy::bsp::load(api, map, settings.styledLights, true))
     throw std::runtime_error("BSP load failed");
   sky.load(proxy::bsp::skyboxImages(), map);
+  if (settings.requireSky && !sky.light())
+    throw std::runtime_error("Quality replay requires a usable sky; provide the map's sky textures or "
+                             "OPENREMIX_PROXY_BAKE_SKY_REFERENCE for procedural skies");
   std::array<float, 3> origin{}, angles{};
   if (!proxy::bsp::playerStart(origin.data(), angles.data()) && !settings.position && settings.cameraPath.empty())
     throw std::runtime_error("map has no player spawn and no replay.position override");
