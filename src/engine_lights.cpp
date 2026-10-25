@@ -1,5 +1,7 @@
 #include "engine_lights.h"
 
+#include "engine_materials.h"
+
 #include <windows.h>
 
 #include <algorithm>
@@ -200,9 +202,10 @@ bool fromDLight(const DLight &d, Light &l) {
 // last 40% of m_FarZ. The path tracer has inverse-square lights only: the
 // irradiance is matched at a reference distance (a quarter of m_FarZ, 64 to
 // 256 units; OPENREMIX_PROXY_PROJECTED_REFERENCE) and falls off by 1/d^2
-// around it. Approximations: the frustum becomes its inscribed cone (half
-// the larger FOV) with the outer half fading, in place of the cookie texture
-// (ignored); nothing ends the light at m_FarZ. Shadows are the path
+// around it. The cookie texture (env_projectedtexture's, a lamp tool's) is
+// passed with the projection's up vector and FOV; until the runtime has it,
+// the frustum becomes its inscribed cone (half the larger FOV) with the outer
+// half fading. Nothing ends the light at m_FarZ. Shadows are the path
 // tracer's. OPENREMIX_PROXY_PROJECTED_SCALE scales the brightness.
 bool fromProjected(const FlashlightState &s, Light &l) {
   static const float brightness = 0.25f * envScale("OPENREMIX_PROXY_PROJECTED_SCALE", 1.0f);
@@ -228,6 +231,14 @@ bool fromProjected(const FlashlightState &s, Light &l) {
   l.direction[0] = 1 - 2 * (q[1] * q[1] + q[2] * q[2]);
   l.direction[1] = 2 * (q[0] * q[1] + q[3] * q[2]);
   l.direction[2] = 2 * (q[0] * q[2] - q[3] * q[1]);
+  // Up: +Z of the rotated basis (Source's flashlight frame is forward +X,
+  // left +Y, up +Z).
+  l.up[0] = 2 * (q[0] * q[2] + q[3] * q[1]);
+  l.up[1] = 2 * (q[1] * q[2] - q[3] * q[0]);
+  l.up[2] = 1 - 2 * (q[0] * q[0] + q[1] * q[1]);
+  l.fov = s.horizontalFov;
+  l.cookie = engine_materials::textureNameOf(s.spotlightTexture);
+  l.cookieFrame = std::max(s.spotlightFrame, 0);
   l.attenuation[2] = 1 / (reference * reference);
   const float outer = std::clamp(fov * 0.5f, 1.0f, 89.0f) * 0.01745329252f;
   l.phiDot = std::cos(outer);
@@ -238,11 +249,16 @@ bool fromProjected(const FlashlightState &s, Light &l) {
 bool sameLights(const std::vector<Light> &a, const std::vector<Light> &b) {
   if (a.size() != b.size())
     return false;
-  constexpr size_t from = offsetof(Light, color), size = offsetof(Light, phiDot) + sizeof(float) - from;
-  for (size_t i = 0; i < a.size(); ++i)
-    if (a[i].hash != b[i].hash || a[i].type != b[i].type ||
-        std::memcmp(reinterpret_cast<const char *>(&a[i]) + from, reinterpret_cast<const char *>(&b[i]) + from, size))
+  const auto floats = [](const float *x, const float *y, size_t n) { return !std::memcmp(x, y, n * sizeof(float)); };
+  for (size_t i = 0; i < a.size(); ++i) {
+    const Light &x = a[i], &y = b[i];
+    if (x.hash != y.hash || x.type != y.type || x.cookie != y.cookie || x.cookieFrame != y.cookieFrame ||
+        !floats(x.color, y.color, 3) ||
+        !floats(x.position, y.position, 3) || !floats(x.direction, y.direction, 3) ||
+        !floats(x.attenuation, y.attenuation, 3) || x.thetaDot != y.thetaDot || x.phiDot != y.phiDot ||
+        !floats(x.up, y.up, 3) || x.fov != y.fov)
       return false;
+  }
   return true;
 }
 

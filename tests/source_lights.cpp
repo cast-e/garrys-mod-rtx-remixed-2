@@ -1,5 +1,6 @@
 #include "source_lights.h"
 #include <cmath>
+#include <cwchar>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -11,6 +12,7 @@ remixapi_LightInfoDistantEXT distant;
 remixapi_Float3D radiance;
 unsigned calls = 0;
 bool reject = false;
+bool hasCookie = false;
 remixapi_LightBakingHintEXT bakingHint = REMIXAPI_LIGHT_BAKING_DEFAULT_EXT;
 void require(bool value, const char *message) {
   if (!value) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
@@ -19,6 +21,7 @@ remixapi_ErrorCode REMIXAPI_CALL capture(const remixapi_LightInfo *info, remixap
   ++calls;
   radiance = info->radiance;
   bakingHint = REMIXAPI_LIGHT_BAKING_DEFAULT_EXT;
+  hasCookie = false;
   const auto type = *static_cast<const remixapi_StructType *>(info->pNext);
   if (type == REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT)
     sphere = *static_cast<const remixapi_LightInfoSphereEXT *>(info->pNext);
@@ -27,7 +30,19 @@ remixapi_ErrorCode REMIXAPI_CALL capture(const remixapi_LightInfo *info, remixap
   else
     require(false, "Unknown native light shape");
   if (type == REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT && sphere.pNext) {
-    const auto &baking = *static_cast<const remixapi_LightInfoBakingEXT *>(sphere.pNext);
+    const void *next = sphere.pNext;
+    if (*static_cast<const remixapi_StructType *>(next) == REMIXAPI_STRUCT_TYPE_LIGHT_INFO_COOKIE_EXT) {
+      const auto &cookie = *static_cast<const remixapi_LightInfoCookieEXT *>(next);
+      require(std::wcscmp(cookie.texture, L"0xABC") == 0 && cookie.fovDegrees == 90 && cookie.up.y == 1,
+              "Projected cookie retains texture, orientation and FOV");
+      hasCookie = true;
+      next = cookie.pNext;
+    }
+    if (!next) {
+      *out = reinterpret_cast<remixapi_LightHandle>(uintptr_t(info->hash));
+      return REMIXAPI_ERROR_CODE_SUCCESS;
+    }
+    const auto &baking = *static_cast<const remixapi_LightInfoBakingEXT *>(next);
     require(baking.sType == REMIXAPI_STRUCT_TYPE_LIGHT_BAKING_EXT, "Optional light hint uses its own extension");
     bakingHint = baking.hint;
   }
@@ -80,9 +95,15 @@ int main() {
               std::abs(sphere.shaping_value.coneSoftness - .5f) < .001f &&
               sphere.shaping_value.focusExponent == 0,
           "Spot angular transition and normalization are preserved");
+  light.cookie = 0xabc;
+  light.cookieFov = 90;
+  light.cookieUp[1] = 1;
+  require(createLight(api, light, 130) && hasCookie && sphere.shaping_value.coneSoftness == 0 &&
+              sphere.volumetricRadianceScale == 1, "Projected lights retain cookie and volumetric contribution");
+  light.cookie = 0;
   light.type = 2;
   require(createLight(api, light, 127, 3, 2) && distant.direction.z == -1 &&
-              std::abs(radiance.x - 8 * pi) < 1e-5f && distant.angularDiameterDegrees == .5f,
+              std::abs(radiance.x - 8 * pi) < 1e-5f && distant.angularDiameterDegrees == .5f && distant.volumetricRadianceScale == 1,
           "Distant light scale and angular diameter are preserved");
   light.color[0] = std::numeric_limits<float>::infinity();
   require(!createLight(api, light, 128), "Nonfinite radiance rejected");
@@ -91,3 +112,4 @@ int main() {
   require(!createLight(api, light, 129), "Runtime rejection is propagated");
   std::puts("Source light units, intensity, surface sidedness, spot cones and ABI passed");
 }
+

@@ -82,7 +82,7 @@ float g_modulationSample[4] = {}; // the last tinted draw's modulation colour (g
 
 struct Stats {
   std::atomic<uint32_t> draws{0}, accepted{0}, offTarget{0}, noPosition{0}, noData{0}, skinned{0}, badPrim{0},
-      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, bspBrushEntitiesDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
+      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, bspBrushEntitiesDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, lightCookies{0}, lightCookieFrameMax{0}, flashlightLitPasses{0}, cameraCulledModels{0};
   std::atomic<uint32_t> setLightKept[4] = {};
   // Unlit and self-illuminated draws (engine_materials): by kind, and why some stayed lit.
   std::atomic<uint32_t> luaLitDraws{0}; // unlit Lua meshes lit as surfaces (onDraw)
@@ -449,18 +449,19 @@ uint64_t uploadedTextureHash(uint64_t hash) {
   return texture ? texture->hash : 0;
 }
 
-NamedTexture &namedTexture(const std::string &name) {
+// frame: of an animated texture, each frame its own upload.
+NamedTexture &namedTexture(const std::string &name, uint32_t frame = 0) {
   static std::unordered_map<std::string, NamedTexture> masks;
   if (masks.size() > 4096)
     masks.clear();
-  auto [it, added] = masks.try_emplace(name);
+  auto [it, added] = masks.try_emplace(frame ? name + '#' + std::to_string(frame) : name);
   if (added)
-    it->second.candidates = bsp::textureCandidates(name);
+    it->second.candidates = bsp::textureCandidates(name, frame);
   return it->second;
 }
 
-uint64_t maskTextureHash(const std::string &name, bool count = true) {
-  NamedTexture &mask = namedTexture(name);
+uint64_t maskTextureHash(const std::string &name, bool count = true, uint32_t frame = 0) {
+  NamedTexture &mask = namedTexture(name, frame);
   if (mask.candidates.empty()) {
     g_stats.emissiveMaskNoHash += count;
     return 0;
@@ -944,7 +945,8 @@ uint32_t g_markerCategories = 0;
 // --- Lights ------------------------------------------------------------------
 // LightDesc_t (public/mathlib/lightdesc.h), 88 bytes.
 using SourceLight = lighting::SourceLight;
-constexpr size_t kLightDescSize = 88;
+constexpr size_t kLightDescSize = 88, kLightDescPart = offsetof(SourceLight, cookieUp);
+
 std::mutex g_lightLock;
 std::unordered_map<uint64_t, SourceLight> g_frameLights, g_lastLights;
 struct CachedLight {
@@ -968,6 +970,7 @@ remixapi_LightHandle createLight(const SourceLight &light, uint64_t hash) {
   static const float lightScale = envScale("OPENREMIX_PROXY_LIGHT_SCALE", 1.0f);
   static const float sunScale = envScale("OPENREMIX_PROXY_SUN_SCALE", 1.0f);
   return lighting::createLight(g_api, light, hash, lightScale, sunScale);
+
 }
 
 } // namespace
@@ -4248,8 +4251,8 @@ void onSetLights(int count, const void *lights) {
     return;
   std::lock_guard<std::mutex> lock(g_lightLock);
   for (int i = 0; i < count; ++i) {
-    SourceLight l;
-    std::memcpy(&l, static_cast<const uint8_t *>(lights) + i * kLightDescSize, sizeof(l));
+    SourceLight l = {};
+    std::memcpy(&l, static_cast<const uint8_t *>(lights) + i * kLightDescSize, kLightDescPart);
     if (l.type < 1 || l.type > 3 || bsp::providesLight(l.type, l.position, l.direction))
       continue;
     // Identity: type, color, position, direction and falloff (not derived
@@ -5214,6 +5217,17 @@ void onPresent() {
           l.attenuation2 = e.attenuation[2];
           l.thetaDot = e.thetaDot;
           l.phiDot = e.phiDot;
+          // The cookie once the runtime has its texture (until then a cone;
+          // the definition changes when it arrives).
+          if (!e.cookie.empty())
+            if (const uint64_t cookie = maskTextureHash(e.cookie, false, uint32_t(e.cookieFrame))) {
+              l.cookie = cookie;
+              std::memcpy(l.cookieUp, e.up, 12);
+              l.cookieFov = e.fov;
+              ++g_stats.lightCookies;
+              if (uint32_t(e.cookieFrame) > g_stats.lightCookieFrameMax)
+                g_stats.lightCookieFrameMax = uint32_t(e.cookieFrame);
+            }
           addDefined(e.hash, l);
         }
     engine_lights::report(styled, styledOff, duplicates);
@@ -6094,9 +6108,10 @@ void dumpStatistics(FILE *out) {
   fprintf(out, "   lights per frame %.1f (cached %zu); sky radiance %.3f %.3f %.3f\n", g_stats.lights.exchange(0) / f,
           g_lights.size(), g_lastSky[0], g_lastSky[1], g_lastSky[2]);
   fprintf(out, "   engine per-model lights kept per frame: point %.2f, directional %.2f, spot %.2f; copies of projected "
-               "textures dropped %.2f\n",
+               "textures dropped %.2f; projected textures with their cookie %.2f (largest cookie frame %u)\n",
           g_stats.setLightKept[1].exchange(0) / f, g_stats.setLightKept[2].exchange(0) / f,
-          g_stats.setLightKept[3].exchange(0) / f, g_stats.projectedCopies.exchange(0) / f);
+          g_stats.setLightKept[3].exchange(0) / f, g_stats.projectedCopies.exchange(0) / f,
+          g_stats.lightCookies.exchange(0) / f, g_stats.lightCookieFrameMax.exchange(0));
   {
     std::lock_guard<std::mutex> lock(g_lightLock);
     for (auto &[h, l] : g_lastLights)

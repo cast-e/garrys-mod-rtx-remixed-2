@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 // Lights read where the engine keeps them, independent of what is drawn or
@@ -32,6 +33,12 @@ struct Light {
   float color[3] = {}, position[3] = {}, direction[3] = {};
   float attenuation[3] = {}; // constant, linear, quadratic
   float thetaDot = 0, phiDot = 0;
+  // Projected textures: the cookie's texture name (as materials name theirs)
+  // and frame (animated textures), the projection's up vector and horizontal
+  // field of view in degrees.
+  float up[3] = {}, fov = 0;
+  std::string cookie;
+  int32_t cookieFrame = 0;
 };
 struct Snapshot {
   bool styles = false;  // style[] was sampled

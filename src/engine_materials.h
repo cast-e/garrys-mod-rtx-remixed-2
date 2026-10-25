@@ -50,6 +50,10 @@ float fresnelShare(float minimum, float maximum, float exponent);
 // shader API's vtable). False: nothing is read, every draw is Lit.
 bool install(const void *const *shaderApiVtable);
 
+// The name of an ITexture of the material system, lower case ("" when the
+// pointer is not one, or before install). Main thread.
+std::string textureNameOf(void *texture);
+
 // IShaderAPI::Bind(IMaterial *), after the engine's (render thread).
 void onBind(void *material);
 

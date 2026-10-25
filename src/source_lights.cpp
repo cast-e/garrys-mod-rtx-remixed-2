@@ -1,6 +1,7 @@
 #include "source_lights.h"
 #include <algorithm>
 #include <cmath>
+#include <cwchar>
 #include <remix/remix_native_ext.h>
 
 namespace proxy::lighting {
@@ -18,9 +19,13 @@ remixapi_LightHandle createLight(remixapi_Interface &api, const SourceLight &lig
   sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
   sphere.position = {light.position[0], light.position[1], light.position[2]};
   sphere.radius = radius;
+  sphere.volumetricRadianceScale = 1;
+  remixapi_LightInfoCookieEXT cookie = {};
+  wchar_t cookiePath[32] = {};
   remixapi_LightInfoDistantEXT distant = {};
   distant.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
   distant.angularDiameterDegrees = .5f;
+  distant.volumetricRadianceScale = 1;
   const float length = std::hypot(light.direction[0], light.direction[1], light.direction[2]);
   const bool validDirection = std::isfinite(length) && length > 1e-6f;
   remixapi_Float3D direction = {};
@@ -60,6 +65,18 @@ remixapi_LightHandle createLight(remixapi_Interface &api, const SourceLight &lig
       const float outer = std::acos(light.phiDot), inner = std::acos(std::clamp(light.thetaDot, -1.f, 1.f));
       sphere.shaping_value.coneAngleDegrees = outer * 180 / pi;
       sphere.shaping_value.coneSoftness = outer > 0 ? std::clamp((outer - inner) / outer, 0.f, 1.f) : 0;
+    }
+    if (light.cookie && sphere.shaping_hasvalue && light.cookieFov > 0 && light.cookieFov < 180) {
+      swprintf(cookiePath, 32, L"0x%llX", static_cast<unsigned long long>(light.cookie));
+      cookie.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_COOKIE_EXT;
+      cookie.texture = cookiePath;
+      cookie.up = {light.cookieUp[0], light.cookieUp[1], light.cookieUp[2]};
+      cookie.fovDegrees = light.cookieFov;
+      const float corner = std::atan(1.41421356f * std::tan(light.cookieFov * .5f * pi / 180));
+      sphere.shaping_value.coneAngleDegrees = std::min(corner * 180 / pi + 1.f, 89.f);
+      sphere.shaping_value.coneSoftness = 0;
+      cookie.pNext = sphere.pNext;
+      sphere.pNext = &cookie;
     }
     info.pNext = &sphere;
   }

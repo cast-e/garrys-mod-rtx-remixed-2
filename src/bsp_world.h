@@ -32,8 +32,9 @@ using MaterialLookup = MaterialRef (*)(uint64_t textureHash, const engine_materi
 
 // dxvk hashes a texture ("models/x/y", as materials name it) can be uploaded
 // under: its largest mips, from the VTF file. Empty: no file, or a format the
-// proxy does not upload. Render thread.
-std::vector<uint64_t> textureCandidates(const std::string &name);
+// proxy does not upload. frame: of an animated texture (Source uploads each
+// as its own texture). Render thread.
+std::vector<uint64_t> textureCandidates(const std::string &name, uint32_t frame = 0);
 // The water the eye is in (the map's leaves), as the runtime's camera medium:
 // its colour (linear) and measurement distance. False: in air, or unknown.
 bool waterAt(const float eye[3], float color[3], float &distance);

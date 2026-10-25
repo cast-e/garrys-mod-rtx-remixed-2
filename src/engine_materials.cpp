@@ -269,6 +269,18 @@ const std::string &textureName(Entry::TextureName &cache, void *var) {
   return cache.name;
 }
 
+std::string textureNameOfTexture(void *texture) {
+  if (!texture || texture == reinterpret_cast<void *>(~uintptr_t(0)) || !g_materialSystem.base)
+    return {};
+  // An ITexture of the material system (its vtable is in that module).
+  const uintptr_t vtable = *static_cast<uintptr_t *>(texture);
+  if (!g_materialSystem.inside(vtable, sizeof(void *)) ||
+      !g_materialSystem.inside(*reinterpret_cast<uintptr_t *>(vtable), 1))
+    return {};
+  const char *name = reinterpret_cast<NameFn>(*reinterpret_cast<void **>(vtable))(texture);
+  return name ? lower(name) : std::string();
+}
+
 void resolve(Entry &e, void *material) {
   e.name = lower(g_materialName(material));
   const char *shader = g_shaderName(material);
@@ -761,5 +773,7 @@ void dumpStatistics(FILE *out) {
     fprintf(out, "     ... and %zu more\n", order.size() - 24);
   g_stats.seen.clear();
 }
+
+std::string textureNameOf(void *texture) { return textureNameOfTexture(texture); }
 
 } // namespace proxy::engine_materials

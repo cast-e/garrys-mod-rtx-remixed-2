@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include <remix/remix_c.h>
 
 namespace proxy::lighting {
@@ -11,8 +12,12 @@ struct SourceLight {
   int32_t type;
   float color[3], position[3], direction[3];
   float range, falloff, attenuation0, attenuation1, attenuation2, theta, phi, thetaDot, phiDot;
+  // Projected cookie metadata follows the engine ABI prefix.
+  float cookieUp[3] = {}, cookieFov = 0, spare = 0;
+  uint64_t cookie = 0;
 };
-static_assert(sizeof(SourceLight) == 76);
+static_assert(offsetof(SourceLight, cookieUp) == 76 && offsetof(SourceLight, cookie) == 96 &&
+              sizeof(SourceLight) == 104);
 
 // Shared by the engine bridge and the standalone map host. Positions, emitter
 // radius and attenuation distances all remain in Source units.
