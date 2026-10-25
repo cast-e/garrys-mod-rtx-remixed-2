@@ -342,7 +342,7 @@ bool loadMaterial(const std::string &name, KeyValues &out, int depth = 0) {
 // dxvk hashes of a texture's three largest mips as D3D would receive them
 // (packed rows; the engine may skip top mips by quality settings). Formats the
 // proxy does not upload yield none.
-std::vector<uint64_t> textureHashes(const std::string &path, bool engine) {
+std::vector<uint64_t> textureHashes(const std::string &path, bool engine, uint32_t frame = 0) {
   const auto read = [engine](const std::string &file, std::vector<uint8_t> &out, uint64_t offset, uint64_t length) {
     return engine ? fs::engineReadFile(file, out, offset, length) : fs::read(file, out, offset, length);
   };
@@ -400,8 +400,11 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine) {
     const uint64_t block = bytes * std::max<uint16_t>(frames, 1) * faces;
     if (block > end)
       break;
+    // Within a level the frames follow one another (each with its faces);
+    // Source uploads each frame of an animated texture as its own texture.
     std::vector<uint8_t> level;
-    if (!read(path, level, end - block, bytes) || level.size() != bytes)
+    const uint64_t at = end - block + uint64_t(frame % std::max<uint16_t>(frames, 1)) * faces * bytes;
+    if (!read(path, level, at, bytes) || level.size() != bytes)
       break;
     if (!convert) {
       hashes.push_back(XXH3_64bits(level.data(), level.size()));
@@ -430,10 +433,10 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine) {
 
 // Of the index's copy and, when the engine has a different one (a workshop
 // addon replacing a stock texture), of that as well.
-std::vector<uint64_t> textureHashes(const std::string &name) {
+std::vector<uint64_t> textureHashes(const std::string &name, uint32_t frame = 0) {
   const std::string path = vtfPath(name);
-  std::vector<uint64_t> hashes = textureHashes(path, false);
-  for (uint64_t hash : textureHashes(path, true))
+  std::vector<uint64_t> hashes = textureHashes(path, false, frame);
+  for (uint64_t hash : textureHashes(path, true, frame))
     if (std::find(hashes.begin(), hashes.end(), hash) == hashes.end())
       hashes.push_back(hash);
   return hashes;
@@ -2883,9 +2886,9 @@ void ensureFileSystem() {
 
 } // namespace
 
-std::vector<uint64_t> textureCandidates(const std::string &name) {
+std::vector<uint64_t> textureCandidates(const std::string &name, uint32_t frame) {
   ensureFileSystem();
-  return textureHashes(name);
+  return textureHashes(name, frame);
 }
 
 float textureLuminance(const std::string &name) {
