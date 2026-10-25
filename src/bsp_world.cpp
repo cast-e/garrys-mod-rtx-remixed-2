@@ -5,6 +5,7 @@
 #include "bsp_world.h"
 #include "bake_charts.h"
 #include "bake_materials.h"
+#include "brush_receivers.h"
 #include "refract_native.h"
 
 #include "lzma_source.h"
@@ -889,6 +890,9 @@ struct World {
   std::vector<uint64_t> sceneInstances;
   std::vector<uint64_t> bakeInstances; // world-space transport; excludes sky-camera polygons
   std::vector<remixapi_BakeSurfaceChartEXT> bakeCharts;
+  std::vector<uint64_t> receiverBakeInstances;
+  std::vector<remixapi_BakeSurfaceChartEXT> receiverBakeCharts;
+  uint64_t receiverBakeVersion = ~0ull;
   uint64_t sceneVersion = ~0ull;
   bool sceneValid = false;
   uint64_t bakeVersion = ~0ull, bakeLights = 0;
@@ -1893,6 +1897,15 @@ SecondLayer secondLayer(int base, bool use) {
 }
 
 proxy::cubemaps::Watcher g_cubemapOverrides;
+receivers::Catalog g_brushReceivers;
+receivers::References g_brushReferences;
+bool brushReceiversEnabled() {
+  static const bool enabled = [] {
+    char option[8] = {};
+    return GetEnvironmentVariableA("OPENREMIX_PROXY_BRUSH_RECEIVERS", option, sizeof(option)) && option[0] == '1';
+  }();
+  return enabled;
+}
 
 constexpr uint64_t kBatchId = 0x42535057; // "BSPW"
 
@@ -1900,6 +1913,11 @@ constexpr uint64_t kBatchId = 0x42535057; // "BSPW"
 template <typename Fn> Fn sceneFunction(const char *name) {
   const HMODULE runtime = GetModuleHandleW(L"remix.dll");
   return runtime ? reinterpret_cast<Fn>(GetProcAddress(runtime, name)) : nullptr;
+}
+receivers::Functions brushReceiverFunctions() {
+  return {sceneFunction<PFN_remixapi_AddSceneInstancesEXT>("remixapi_AddSceneInstancesEXT"),
+          sceneFunction<PFN_remixapi_ChangeSceneInstancesEXT>("remixapi_ChangeSceneInstancesEXT"),
+          sceneFunction<PFN_remixapi_RemoveSceneInstancesEXT>("remixapi_RemoveSceneInstancesEXT")};
 }
 
 void invalidateBakeScene() {
@@ -1932,6 +1950,9 @@ void dropSceneInstances() {
   g_world.sceneInstances.clear();
   g_world.bakeInstances.clear();
   g_world.bakeCharts.clear();
+  g_world.receiverBakeInstances.clear();
+  g_world.receiverBakeCharts.clear();
+  g_world.receiverBakeVersion = ~0ull;
   g_world.sceneValid = false;
 }
 
@@ -1941,6 +1962,8 @@ void destroyMeshes() {
   if (auto publish = sceneFunction<PFN_remixapi_SetReflectionVolumesEXT>("remixapi_SetReflectionVolumesEXT"))
     publish(nullptr);
   dropSceneInstances();
+  if (g_world.api) g_brushReferences.clear(*g_world.api, brushReceiverFunctions());
+  g_brushReceivers.clear();
   g_world.sceneVersion = ~0ull;
   if (g_world.batchValid && g_world.api) {
     using BatchFn = remixapi_ErrorCode(REMIXAPI_CALL *)(uint64_t);
@@ -2600,6 +2623,116 @@ std::vector<Leaf> leafsOf(const Bsp &bsp) {
   return out;
 }
 
+void collectBrushReceivers(const Bsp &bsp) {
+  if (!brushReceiversEnabled()) return;
+  const auto [text, length] = bsp.lump<char>(kEntities);
+  const auto [models, modelCount] = bsp.lump<Model>(kModels);
+  const auto [faces, faceCount] = bsp.lump<Face>(kFaces);
+  const auto [planes, planeCount] = bsp.lump<Plane>(kPlanes);
+  const auto [vertices, vertexCount] = bsp.lump<std::array<float, 3>>(kVertexes);
+  const auto [edges, edgeCount] = bsp.lump<std::array<uint16_t, 2>>(kEdges);
+  const auto [surfEdges, surfEdgeCount] = bsp.lump<int32_t>(kSurfEdges);
+  const auto [texInfos, texInfoCount] = bsp.lump<TexInfo>(kTexInfo);
+  if (!text || !models || !faces || !planes || !vertices || !edges || !surfEdges || !texInfos) return;
+  const uint64_t scene = XXH3_64bits(g_world.map.data(), g_world.map.size()) | 1;
+  const std::string entities(text, length);
+  for (size_t open = entities.find('{'); open != std::string::npos; open = entities.find('{', open + 1)) {
+    const size_t close = entities.find('}', open);
+    if (close == std::string::npos) break;
+    KeyValues kv;
+    if (!parseKeyValues("entity " + entities.substr(open, close - open + 1), kv) ||
+        lower(kv.values["classname"]) != "func_brush" || !kv.values["parentname"].empty() ||
+        kv.values["vrad_brush_cast_shadows"] != "0") continue;
+    const auto &name = kv.values["model"];
+    if (name.size() < 2 || name[0] != '*') continue;
+    char *end = nullptr;
+    const long modelIndex = std::strtol(name.c_str() + 1, &end, 10);
+    if (*end || modelIndex <= 0 || size_t(modelIndex) >= modelCount) continue;
+    float origin[3]{}, angles[3]{}, pose[3][4];
+    if ((!kv.values["origin"].empty() && std::sscanf(kv.values["origin"].c_str(), "%f %f %f", origin, origin + 1, origin + 2) != 3) ||
+        (!kv.values["angles"].empty() && std::sscanf(kv.values["angles"].c_str(), "%f %f %f", angles, angles + 1, angles + 2) != 3)) continue;
+    angleMatrix(angles, origin, pose);
+    const auto &model = models[modelIndex];
+    if (model.firstFace < 0 || model.numFaces < 0 || size_t(model.firstFace) > faceCount ||
+        size_t(model.numFaces) > faceCount - size_t(model.firstFace)) continue;
+    std::map<int32_t, receivers::Part> parts;
+    for (int32_t index = model.firstFace; index < model.firstFace + model.numFaces; ++index) {
+      const auto &face = faces[index];
+      if (face.texInfo < 0 || size_t(face.texInfo) >= texInfoCount || face.plane >= planeCount ||
+          face.numEdges < 3 || face.firstEdge < 0 || face.dispInfo >= 0) continue;
+      const auto &tex = texInfos[face.texInfo];
+      if (tex.texData < 0 || tex.flags & (kSurfSky2D | kSurfSky | kSurfNoDraw | kSurfHint | kSurfSkip | kSurfTrans)) continue;
+      std::vector<receivers::Point> corners;
+      for (int32_t corner = 0; corner < face.numEdges; ++corner) {
+        const size_t address = size_t(face.firstEdge) + corner;
+        if (address >= surfEdgeCount) break;
+        const int32_t edge = surfEdges[address];
+        const uint64_t selected = edge < 0 ? uint64_t(-int64_t(edge)) : uint64_t(edge);
+        if (selected >= edgeCount) break;
+        const auto vertex = edges[selected][edge < 0 ? 1 : 0];
+        if (vertex >= vertexCount) break;
+        corners.push_back(vertices[vertex]);
+      }
+      if (corners.size() != size_t(face.numEdges)) continue;
+      if (std::any_of(corners.begin(), corners.end(), [](const auto &p) {
+            return !std::all_of(p.begin(), p.end(), [](float v) { return std::isfinite(v); });
+          })) continue;
+      const auto &normal = planes[face.plane].normal;
+      uint32_t dominant = 0;
+      for (uint32_t axis = 1; axis < 3; ++axis)
+        if (std::abs(normal[axis]) > std::abs(normal[dominant])) dominant = axis;
+      const uint32_t u = (dominant + 1) % 3, v = (dominant + 2) % 3;
+      float minimum[2]{corners[0][u], corners[0][v]}, maximum[2]{minimum[0], minimum[1]};
+      for (const auto &point : corners) {
+        minimum[0] = std::min(minimum[0], point[u]); minimum[1] = std::min(minimum[1], point[v]);
+        maximum[0] = std::max(maximum[0], point[u]); maximum[1] = std::max(maximum[1], point[v]);
+      }
+      const float extent[2]{maximum[0] - minimum[0], maximum[1] - minimum[1]};
+      if (extent[0] <= 1e-6f || extent[1] <= 1e-6f) continue;
+      auto &part = parts[tex.texData];
+      if (!part.identity) {
+        const uint64_t fields[]{0x4252524356520001ull, uint64_t(modelIndex), uint64_t(tex.texData)};
+        part.identity = XXH3_64bits_withSeed(fields, sizeof(fields), scene) | 1;
+        std::copy_n(&pose[0][0], 12, part.pose.begin());
+      }
+      const uint32_t base = uint32_t(part.vertices.size());
+      const uint32_t firstIndex = uint32_t(part.indices.size());
+      for (const auto &point : corners) {
+        remixapi_HardcodedVertex vertex{};
+        std::copy(point.begin(), point.end(), vertex.position);
+        std::copy_n(normal, 3, vertex.normal);
+        vertex.color = 0xffffffff;
+        part.vertices.push_back(vertex);
+      }
+      float winding = 0;
+      for (size_t c = 1; c + 1 < corners.size(); ++c) {
+        float a[3], b[3];
+        for (uint32_t axis = 0; axis < 3; ++axis) { a[axis] = corners[c][axis] - corners[0][axis]; b[axis] = corners[c + 1][axis] - corners[0][axis]; }
+        winding += (a[1]*b[2]-a[2]*b[1])*normal[0] + (a[2]*b[0]-a[0]*b[2])*normal[1] + (a[0]*b[1]-a[1]*b[0])*normal[2];
+      }
+      if (!std::isfinite(winding) || winding == 0) continue;
+      for (uint32_t c = 1; c + 1 < corners.size(); ++c)
+        if (winding > 0) part.indices.insert(part.indices.end(), {base, base + c + 1, base + c});
+        else part.indices.insert(part.indices.end(), {base, base + c, base + c + 1});
+      // These brushes carry no Source lightmap dimensions. Supply a planar
+      // chart rather than depending on automatic model charts. Budget fitting
+      // derives the final world density; 16 units is only its authored fallback.
+      lightmaps::Chart chart;
+      chart.firstIndex = firstIndex;
+      chart.width = uint32_t(std::clamp(std::ceil(extent[0] / 16.f) + 1.f, 2.f, 4096.f));
+      chart.height = uint32_t(std::clamp(std::ceil(extent[1] / 16.f) + 1.f, 2.f, 4096.f));
+      for (size_t corner = firstIndex; corner < part.indices.size(); ++corner) {
+        const auto &point = part.vertices[part.indices[corner]].position;
+        chart.texcoords.push_back((point[u] - minimum[0]) / extent[0] * (chart.width - 1));
+        chart.texcoords.push_back((point[v] - minimum[1]) / extent[1] * (chart.height - 1));
+      }
+      part.charts.push_back(std::move(chart));
+    }
+    for (auto &[material, part] : parts) g_brushReceivers.add(std::move(part));
+  }
+  std::fprintf(stderr, "BSP brush receiver catalog: %zu complete material parts\n", g_brushReceivers.parts().size());
+}
+
 bool build(const Bsp &bsp) {
   const auto [planes, planeCount] = bsp.lump<Plane>(kPlanes);
   const auto [vertexes, vertexCount] = bsp.lump<std::array<float, 3>>(kVertexes);
@@ -2619,6 +2752,7 @@ bool build(const Bsp &bsp) {
   if (!planes || !vertexes || !edges || !surfEdges || !texInfos || !texDatas || !stringTable || !strings || !faces ||
       !models || !modelCount || bsp.lumpVersion(kFaces) > 1 || !leafs)
     return false;
+  collectBrushReceivers(bsp);
 
   // The 3D skybox is a sealed room: its own BSP area (Leaf::areaFlags low 9
   // bits). Faces referenced by leaves of the sky camera's area, and points
@@ -3517,6 +3651,12 @@ bool load(const remixapi_Interface &api, const std::string &requestedMap, bool l
 }
 
 bool active() { return g_active; }
+bool brushReceiverPose(const float *rows) {
+  return brushReceiversEnabled() && g_active && g_brushReferences.ready() && g_brushReceivers.hasPose(rows);
+}
+uint64_t brushReceiverIdentity(const float *rows, const std::vector<std::array<float, 3>> &corners) {
+  return brushReceiverPose(rows) ? g_brushReceivers.match(rows, corners) : 0;
+}
 
 bool overlaysActive() { return g_active && !g_world.overlayGroups.empty(); }
 
@@ -3560,6 +3700,20 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
       g_world.bakeReason = "static material textures are still loading";
     return;
   }
+  if (brushReceiversEnabled() && !g_brushReferences.ready() &&
+      !g_brushReferences.prepare(g_brushReceivers, *g_world.api, brushReceiverFunctions())) {
+    g_world.bakeReason = "brush receiver references are not ready";
+    return;
+  }
+  const auto &receiverInstances = g_brushReferences.instances();
+  if (!receiverInstances.empty() && g_world.receiverBakeVersion != g_world.submitVersion) {
+    g_world.receiverBakeInstances = g_world.bakeInstances;
+    g_world.receiverBakeInstances.insert(g_world.receiverBakeInstances.end(), receiverInstances.begin(), receiverInstances.end());
+    g_world.receiverBakeCharts = g_world.bakeCharts;
+    const auto &charts = g_brushReferences.charts();
+    g_world.receiverBakeCharts.insert(g_world.receiverBakeCharts.end(), charts.begin(), charts.end());
+    g_world.receiverBakeVersion = g_world.submitVersion;
+  }
   uint64_t signature = XXH3_64bits(lights.data(), lights.size() * sizeof(lights[0]));
   if (probeBounds)
     signature = XXH3_64bits_withSeed(probeBounds->data(), sizeof(*probeBounds), signature);
@@ -3568,13 +3722,16 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
                                uint64_t(reinterpret_cast<uintptr_t>(light.runtimeLight)), light.style};
     signature = XXH3_64bits_withSeed(fields, sizeof(fields), signature);
   }
+  if (!receiverInstances.empty())
+    signature = XXH3_64bits_withSeed(receiverInstances.data(), receiverInstances.size() * sizeof(uint64_t), signature);
   // Successful requests compare dependency revisions: the native runtime
   // captures again only when a material/mod/light changed. Retry
   // refused inputs twice a second while late assets finish resolving.
   if (g_world.bakeStatus != int(REMIXAPI_ERROR_CODE_SUCCESS) &&
       g_world.bakeVersion == g_world.submitVersion && g_world.bakeLights == signature && g_world.frames % 30)
     return;
-  remixapi_BakeSceneStyledLightsInfoEXT styledInfo = {};
+  remixapi_BakeSceneReceiversInfoEXT receiverInfo{};
+  auto &styledInfo = receiverInfo.styled;
   auto &reflections = styledInfo.reflections;
   auto &surfaces = reflections.surfaces;
   auto &bounds = surfaces.bounds;
@@ -3584,6 +3741,12 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
                                : REMIXAPI_BAKE_SCENE_STYLED_LIGHTS_VERSION_EXT;
   styledInfo.styledLightCount = uint32_t(styled.size());
   styledInfo.styledLights = styled.data();
+  if (!receiverInstances.empty()) {
+    info.structSize = sizeof(receiverInfo);
+    info.version = REMIXAPI_BAKE_SCENE_RECEIVERS_VERSION_EXT;
+    receiverInfo.receiverCount = uint32_t(receiverInstances.size());
+    receiverInfo.receivers = receiverInstances.data();
+  }
   reflections.reflectionRevision = 1;
   reflections.positionCount = uint32_t(g_world.reflectionSeeds.size());
   reflections.positions = g_world.reflectionSeeds.empty() ? nullptr : g_world.reflectionSeeds.front().data();
@@ -3599,8 +3762,9 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
     reflections.positions = localReflectionSeeds.empty() ? nullptr : localReflectionSeeds.front().data();
   }
   surfaces.chartRevision = g_world.submitVersion + 1;
-  surfaces.chartCount = uint32_t(g_world.bakeCharts.size());
-  surfaces.charts = g_world.bakeCharts.data();
+  const auto &charts = receiverInstances.empty() ? g_world.bakeCharts : g_world.receiverBakeCharts;
+  surfaces.chartCount = uint32_t(charts.size());
+  surfaces.charts = charts.data();
   std::copy_n(g_world.playableMins, 3, bounds.minimum);
   std::copy_n(g_world.playableMaxs, 3, bounds.maximum);
   // Diagnostic hosts can concentrate probe density in a reference domain.
@@ -3613,8 +3777,9 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
   info.revision = g_world.submitVersion + 1;
   info.sceneScale = .0254f;
   info.state = REMIXAPI_BAKE_SCENE_READY_EXT;
-  info.instances = g_world.bakeInstances.data();
-  info.instanceCount = uint32_t(g_world.bakeInstances.size());
+  const auto &instances = receiverInstances.empty() ? g_world.bakeInstances : g_world.receiverBakeInstances;
+  info.instances = instances.data();
+  info.instanceCount = uint32_t(instances.size());
   info.lights = lights.data();
   info.lightCount = uint32_t(lights.size());
   g_world.bakeStatus = int(publish(&info));
@@ -3632,6 +3797,8 @@ void publishBakeScene(const std::vector<remixapi_LightHandle> &lights,
     reflections.positions = nullptr;
     styledInfo.styledLightCount = 0;
     styledInfo.styledLights = nullptr;
+    receiverInfo.receiverCount = 0;
+    receiverInfo.receivers = nullptr;
     publish(&info);
   }
   g_world.bakeVersion = g_world.submitVersion;

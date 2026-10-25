@@ -484,3 +484,22 @@ drops a negative value after a `+` command (`OPENREMIX_PROXY_PICMIP` gives
 another value, or `keep` leaves the saved one). Do not add `-dxlevel`: it resets
 the saved video settings on every launch (DirectX 9.0+, 95, is the saved
 level). `OPENREMIX_PROXY_ADVANCED_VIDEO=1` keeps the Advanced button.
+
+## Experimental brush lightmap receivers
+
+`OPENREMIX_PROXY_BRUSH_RECEIVERS=1` enables camera-independent lightmap references
+for unparented `func_brush` models explicitly marked `vrad_brush_cast_shadows=0`.
+This requires the native version-6 bake-scene extension. It remains opt-in while
+broader maps, brush editing and reflection behaviour are qualified.
+
+`brush_receivers` owns the immutable geometry catalog and invisible retained
+references. The BSP relay supplies complete per-face charts and stable identities;
+the live draw relay matches exact oriented triangles at the authored placement.
+Current materials and visibility still come from the game. Unknown, moved,
+ambiguous or split material parts retain ordinary live rendering and probe lighting.
+Receiver chart ownership does not change the live brush shadow policy.
+
+These references receive lighting but do not enter static transport, occlusion or
+reflection capture. Brushes which cast baked shadows need a separate transport
+policy before entering this path. Never classify arbitrary dynamic entities as
+receiver-only merely to reduce their rendering cost.
