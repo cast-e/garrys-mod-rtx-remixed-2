@@ -20,6 +20,7 @@
 #include "host_passes.h"
 #include "particles.h"
 #include "texture_categories.h"
+#include "vb_origins.h"
 #include <unordered_set>
 
 #include "texture_formats.h"
@@ -81,9 +82,10 @@ float g_modulationSample[4] = {}; // the last tinted draw's modulation colour (g
 
 struct Stats {
   std::atomic<uint32_t> draws{0}, accepted{0}, offTarget{0}, noPosition{0}, noData{0}, skinned{0}, badPrim{0},
-      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
+      badRange{0}, cacheHits{0}, created{0}, transient{0}, evicted{0}, submitted{0}, frames{0}, nonFinite{0}, rejected{0}, flat{0}, uiDraws{0}, uiNoTexture{0}, depthOnly{0}, additive{0}, blended{0}, duplicate{0}, skyFrames{0}, lights{0}, playerBody{0}, textures{0}, textureSkipped{0}, ignored{0}, bspDropped{0}, bspKeptBlended{0}, bspKeptDynamic{0}, bspPropsDropped{0}, bspOverlaysDropped{0}, bspBrushEntitiesDropped{0}, skyViewDemoted{0}, flashlightPasses{0}, worldViewCameras{0}, uiStencil{0}, additiveBlack{0}, haloSources{0}, haloGroups{0}, maskGroups{0}, maskSources{0}, maskOverlays{0}, maskUi{0}, maskCuts{0}, emissiveNotItsTexture{0}, rigidModels{0}, projectedCopies{0}, flashlightLitPasses{0}, cameraCulledModels{0};
   std::atomic<uint32_t> setLightKept[4] = {};
   // Unlit and self-illuminated draws (engine_materials): by kind, and why some stayed lit.
+  std::atomic<uint32_t> luaLitDraws{0}; // unlit Lua meshes lit as surfaces (onDraw)
   std::atomic<uint32_t> unlitDraws{0}, selfIllumDraws{0}, selfIllumMaskDraws{0}, selfIllumMaskAlphaDraws{0},
       emissiveLightDraws{0}, unlitVertexColorDraws{0}, modulatedDraws{0}, wireframeDraws{0}, modulatedBlack{0}, modulatedMasked{0}, modulatedMetal{0}, emissiveNoTexture{0}, emissiveMaskNoHash{0},
       emissiveMaskNotUploaded{0}, emissiveCreated{0}, emissiveFailed{0}, emissiveEvicted{0};
@@ -1637,6 +1639,10 @@ float flexScale(const Draw &d) {
 // Converts one indexed draw into a Remix mesh. Returns nullptr when the draw
 // cannot be represented yet.
 float g_liftVertexStep = 0; // added lift per vertex index (render thread; set by onDraw for decals)
+// Forwarded vertex colours keep their hue only: each scaled so its largest
+// channel is full (render thread; set by onDraw for lit Lua meshes, whose
+// colours carry baked shading the path tracer replaces).
+bool g_hueColors = false;
 // `normalOffset` > 0 lifts the surface off its receiver (decals, see onDraw):
 // along the vertex normals, or without them (DecalModulate's vertices are a
 // position and a texture coordinate) along the summed face normals, e1 x e2
@@ -1779,6 +1785,12 @@ remixapi_MeshHandle buildMesh(const Draw &d, uint64_t hash, uint32_t bonesPerVer
     if (col)
       if (const uint8_t *c = fetch(col, v, 4)) { // D3DCOLOR in memory, the runtime's layout
         std::memcpy(&out.color, c, 4);
+        if (g_hueColors) {
+          const uint32_t r = (out.color >> 16) & 255, g = (out.color >> 8) & 255, b = out.color & 255;
+          const uint32_t top = std::max({r, g, b});
+          out.color = top ? (out.color & 0xff000000u) | (r * 255 / top) << 16 | (g * 255 / top) << 8 | b * 255 / top
+                          : out.color | 0xffffff;
+        }
         anyRgb |= out.color & 0xffffff;
       }
   }
@@ -3711,6 +3723,28 @@ void onDraw(const Draw &d) {
       std::lock_guard<std::mutex> lock(g_transientSampleLock);
       ++g_keptWorldTextures[baseTextureHash];
     }
+  } else if (!d.blend && !ps.dynamic && bsp::active() && d.primCount) {
+    // A func_lod brush, which the BSP world bakes (bsp::isBakedBrushEntity):
+    // its first triangle's corners are the baked faces' corners. (Static
+    // vertices like the world's; the index buffer is rebuilt per frame. A
+    // fading one is blended and stays: the baked copy is opaque.)
+    const float *corner[3] = {};
+    for (uint32_t k = 0; k < 3; ++k) {
+      const size_t at = size_t(d.startIndex + k) * (d.indices.is32 ? 4 : 2);
+      if (at + (d.indices.is32 ? 4 : 2) > d.indices.size)
+        break;
+      uint32_t index = 0;
+      std::memcpy(&index, d.indices.data + at, d.indices.is32 ? 4 : 2);
+      const int64_t vertex = int64_t(d.baseVertex) + index;
+      const size_t offset = size_t(ps.offset) + size_t(vertex) * ps.stride + pos->Offset;
+      if (vertex < 0 || offset + 12 > ps.size)
+        break;
+      corner[k] = reinterpret_cast<const float *>(ps.data + offset);
+    }
+    if (corner[2] && bsp::isBakedBrushEntity(corner[0], corner[1], corner[2])) {
+      ++g_stats.bspBrushEntitiesDropped;
+      return;
+    }
   }
 
   // What the Source material bound for this draw does with its texture
@@ -3721,10 +3755,34 @@ void onDraw(const Draw &d) {
   if (!additiveDraw && !multiply)
     shading = shadingFor(d.texture0, engine_materials::current());
   probeMaterialDraw(d.texture0, engine_materials::current(), shading, additiveDraw, multiply);
+  if (shading.mode == engine_materials::Shading::Unlit)
+    vb_origins::countUnlit(d.streams[0].buffer);
+  // Lua-built meshes (a Lua Mesh(): InfMap terrain and scripted maps) are
+  // static buffers made outside every engine allocation bracket
+  // (vb_origins). Their unlit materials are lit as surfaces: such maps bake
+  // their shading into vertex colours for want of lighting, which the path
+  // tracer provides. Model sprites, screens and 3D2D panels (engine buffers)
+  // stay unlit. OPENREMIX_PROXY_LUA_MESHES_LIT=0 keeps them unlit.
+  static const bool litLuaMeshes = [] {
+    char v[8] = {};
+    return !(GetEnvironmentVariableA("OPENREMIX_PROXY_LUA_MESHES_LIT", v, sizeof(v)) && v[0] == '0');
+  }();
+  bool luaLit = false, luaColors = false;
+  if (litLuaMeshes && shading.mode == engine_materials::Shading::Unlit) {
+    vb_origins::Origin origin;
+    luaLit = vb_origins::find(d.streams[0].buffer, origin) && !origin.allocator && !origin.dynamic;
+    if (luaLit) {
+      luaColors = shading.vertexColor;
+      shading = {};
+      shading.base = engine_materials::current().base;
+      ++g_stats.luaLitDraws;
+    }
+  }
   // An unlit material's $vertexcolor: its vertices carry the colour (3D2D
   // panels, sprites). Other COLOR0 streams (baked prop lighting) do not.
   const bool hasColors = findElement(d.elements, D3DDECLUSAGE_COLOR, 0) != nullptr;
   const bool unlitColors = shading.mode == engine_materials::Shading::Unlit && shading.vertexColor && hasColors;
+  const bool hueColors = luaColors && hasColors; // a lit Lua mesh's $vertexcolor: its hue
   // An alpha decal's vertices carry its colour and its fade ($vertexcolor,
   // $vertexalpha: scorch marks and sprays fade out through vertex alpha; the
   // world shaders read both with $vertexcolor alone). mod2x and multiply
@@ -3741,6 +3799,12 @@ void onDraw(const Draw &d) {
                               (bound.vertexAlpha || (bound.lightmapped && bound.vertexColor));
   const bool decalColors = decalColorsEnabled && !unlitColors && decalKind == kDecalAlpha && decalMaterial && hasColors &&
                            (bound.vertexColor || decalAlphaFade);
+  // Vertex colours the mesh carries (texture x vertex colour by default).
+  const bool meshColors = unlitColors || decalColors || hueColors;
+  struct HueScope {
+    explicit HueScope(bool on) { g_hueColors = on; }
+    ~HueScope() { g_hueColors = false; }
+  } hueScope(hueColors);
   if (decalKind == kDecalMod2x && decalMaterial && bound.vertexColor && bound.vertexAlpha)
     ++g_stats.decalModulateFade;
   // Decals over decals: all at one height they were coplanar, and which one a
@@ -3780,6 +3844,7 @@ void onDraw(const Draw &d) {
   static_assert(sizeof(Key) == 3 * sizeof(void *) + 12 * sizeof(uint32_t), "Key must have no padding: it is hashed as bytes");
   uint64_t hash = fnv(&key, sizeof(key)) ^ (lifted ? 0xdeca1deca1deca1ull : 0) ^
                   (unlitColors ? 0xc0105c0105c0105ull : 0) ^ (decalColors ? 0x0decac0105c0105ull : 0) ^
+                  (hueColors ? 0x4e0c0105c0105ull : 0) ^
                   (lifted && windingSign > 0 ? 0x5197000000000000ull : 0);
   // A flexed draw (see flexScale) changes every frame although its own
   // buffers are static. `flexContent` names this frame's deltas: the flex
@@ -3815,8 +3880,8 @@ void onDraw(const Draw &d) {
     FlexMesh &f = g_flexMeshes[flexHash];
     if (!f.handle || f.content != flexContent) {
       const remixapi_MeshHandle refreshed =
-          buildMesh(d, flexHash, bonesPerVertex, &boneCount, 0, unlitColors || decalColors, unlitColors || decalColors,
-                    windingSign, &faceNormals, flex, nullptr, true);
+          buildMesh(d, flexHash, bonesPerVertex, &boneCount, 0, meshColors, meshColors, windingSign, &faceNormals, flex,
+                    nullptr, true);
       if (refreshed) {
         f.handle = refreshed;
         f.content = flexContent;
@@ -3843,8 +3908,8 @@ void onDraw(const Draw &d) {
       ++g_transientDecls[d.declaration];
     }
     // Additive as onPresent classifies it (destination factor ONE): raster only.
-    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, additiveDraw || unlitColors || decalColors,
-                     unlitColors || decalColors, windingSign, &faceNormals, flex);
+    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, additiveDraw || meshColors, meshColors, windingSign,
+                     &faceNormals, flex);
     if (!mesh) {
       g_stats.decalNoMesh += lifted;
       return;
@@ -3861,8 +3926,7 @@ void onDraw(const Draw &d) {
     it->second.lastFrame = g_frame;
     ++g_stats.cacheHits;
   } else {
-    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, unlitColors || decalColors, unlitColors || decalColors,
-                     windingSign, &faceNormals);
+    mesh = buildMesh(d, hash, bonesPerVertex, &boneCount, lift, meshColors, meshColors, windingSign, &faceNormals);
     if (!mesh) {
       g_stats.decalNoMesh += lifted;
       return;
@@ -4772,13 +4836,19 @@ void onPresent() {
     // their previous transforms and bones (motion vectors, denoiser history).
     // Source does not say which entity a draw belongs to: every instance of a
     // cached mesh takes over the id of the nearest instance of that mesh in
-    // the previous frame (root bone or transform translation, within 64
-    // units); the rest get new ids.
+    // the previous frames (root bone or transform translation, within 64
+    // units); the rest get new ids. Instances not drawn are remembered for
+    // kTrackedKeep frames: a prop that leaves the view (Source's culling) and
+    // comes back keeps its id, and with it the runtime's light tree slots of
+    // its emissive triangles (a new id rebuilt part of the tree, ~30 ms with
+    // a pile of emissive props at the edge of the view, every frame).
     struct Tracked {
       uint64_t id;
       float position[3];
       bool taken;
+      uint32_t age; // frames since it was drawn
     };
+    constexpr uint32_t kTrackedKeep = 600;
     static std::unordered_map<uint64_t, std::vector<Tracked>> tracked;
     static uint64_t nextTrackedId = 1;
     std::unordered_map<uint64_t, std::vector<Tracked>> nextTracked;
@@ -4794,6 +4864,9 @@ void onPresent() {
           float d2 = 0;
           for (int i = 0; i < 3; ++i)
             d2 += (candidate.position[i] - position[i]) * (candidate.position[i] - position[i]);
+          // Those drawn last frame first: a remembered one counts at twice its distance.
+          if (candidate.age)
+            d2 *= 4;
           if (d2 < bestDistance2) {
             bestDistance2 = d2;
             best = &candidate;
@@ -4806,7 +4879,7 @@ void onPresent() {
       } else {
         id = 0x7000000000000000ull | nextTrackedId++; // static ids are 64-bit hashes: collisions are negligible
       }
-      nextTracked[group].push_back({id, {position[0], position[1], position[2]}, false});
+      nextTracked[group].push_back({id, {position[0], position[1], position[2]}, false, 0});
       return id;
     };
     std::unordered_map<uint64_t, bool> seen; // multipass draws: the first pass wins
@@ -5043,6 +5116,12 @@ void onPresent() {
       g_api.DrawInstance(&info);
       ++g_stats.submitted;
     }
+    for (auto &[group, list] : tracked)
+      for (auto &entry : list)
+        if (!entry.taken && entry.age + 1 < kTrackedKeep) {
+          entry.age++;
+          nextTracked[group].push_back(entry);
+        }
     tracked = std::move(nextTracked);
     {
       Timer bspTimer(g_usBsp, &g_totalUs[3]);
@@ -5376,6 +5455,7 @@ bool textureLayout(D3DFORMAT format, uint32_t width, uint32_t height, remixapi_F
     rowBytes = blocksW * 8;
     rows = blocksH;
     break;
+  case D3DFMT_DXT3: // transcoded to BC3 (formats::transcodeBC2toBC3)
   case D3DFMT_DXT5:
     remixFormat = REMIXAPI_FORMAT_BC3_SRGB;
     rowBytes = blocksW * 16;
@@ -5511,6 +5591,8 @@ void onTextureUpload(const void *texture, uint32_t width, uint32_t height, D3DFO
   const uint64_t contentHash = dxvk::textureHash(pixels.data(), pixels.size());
   const uint64_t legacyHash = dxvk::legacyTextureHash(pixels.data(), pixels.size());
   noteReplacementKey(contentHash, 'T');
+  if (format == D3DFMT_DXT3)
+    formats::transcodeBC2toBC3(pixels.data(), pixels.size());
   // The X bytes are whatever the engine's conversion left there (unwritten
   // memory for some textures): a texture is also found by its hash with X
   // 0xff, which a file's pixels predict (bsp_world textureHashes).
@@ -5564,6 +5646,8 @@ void onTextureLevel(const void *texture, uint32_t level, uint32_t width, uint32_
     return;
   std::vector<uint8_t> pixels = packLevel(data, pitch, rowBytes, rows);
   ++g_textureLevelsSeen;
+  if (format == D3DFMT_DXT3)
+    formats::transcodeBC2toBC3(pixels.data(), pixels.size());
   if (format == D3DFMT_X8R8G8B8)
     for (size_t i = 3; i < pixels.size(); i += 4)
       pixels[i] = 0xff;
@@ -5831,8 +5915,12 @@ void dumpStatistics(FILE *out) {
   fprintf(out, "   world-list draws: dropped (BSP world) %.1f, kept blended %.1f, kept dynamic %.1f\n",
           g_stats.bspDropped.exchange(0) / f, g_stats.bspKeptBlended.exchange(0) / f,
           g_stats.bspKeptDynamic.exchange(0) / f);
-  fprintf(out, "   dropped for the BSP world: static prop draws %.1f, overlay draws %.1f\n",
-          g_stats.bspPropsDropped.exchange(0) / f, g_stats.bspOverlaysDropped.exchange(0) / f);
+  fprintf(out, "   dropped for the BSP world: static prop draws %.1f, overlay draws %.1f, func_lod draws %.1f\n",
+          g_stats.bspPropsDropped.exchange(0) / f, g_stats.bspOverlaysDropped.exchange(0) / f,
+          g_stats.bspBrushEntitiesDropped.exchange(0) / f);
+  vb_origins::write(out, f);
+  fprintf(out, "   Lua meshes lit as surfaces per frame: %.1f (OPENREMIX_PROXY_LUA_MESHES_LIT)\n",
+          g_stats.luaLitDraws.exchange(0) / f);
   bsp::dumpStatistics(out);
   remix_ui::dumpStatistics(out);
   {

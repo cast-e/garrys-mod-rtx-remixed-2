@@ -29,6 +29,7 @@
 #include <cstring>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace proxy::bsp {
@@ -230,12 +231,14 @@ std::string lower(std::string s) {
   return s;
 }
 
-// Material texture references may already include the VTF extension.
-std::string texturePath(const std::string &name) {
-  auto path = lower(name);
-  if (path.size() < 4 || path.compare(path.size() - 4, 4, ".vtf") != 0)
-    path += ".vtf";
-  return "materials/" + path;
+// A material's texture file. Source drops an extension the VMT spells out
+// ("$basetexture" "models/props_mvm/sack_flat.vtf").
+std::string vtfPath(const std::string &name) {
+  std::string path = lower(name);
+  if (path.size() > 4 && path.compare(path.size() - 4, 4, ".vtf") == 0)
+    path.resize(path.size() - 4);
+  return "materials/" + path + ".vtf";
+
 }
 
 bool parseKeyValues(const std::string &text, KeyValues &out) {
@@ -390,6 +393,7 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
   case 20: // DXT1_ONEBITALPHA
     blockBytes = 8;
     break;
+  case 14: // DXT3
   case 15: // DXT5
     blockBytes = 16;
     break;
@@ -445,7 +449,8 @@ std::vector<uint64_t> textureHashes(const std::string &path, bool engine, bool l
 // Of the index's copy and, when the engine has a different one (a workshop
 // addon replacing a stock texture), of that as well.
 std::vector<uint64_t> textureHashes(const std::string &name) {
-  const std::string path = texturePath(name);
+  const std::string path = vtfPath(name);
+
   std::vector<uint64_t> hashes = textureHashes(path, false);
   for (uint64_t hash : textureHashes(path, true))
     if (std::find(hashes.begin(), hashes.end(), hash) == hashes.end())
@@ -464,7 +469,7 @@ std::vector<uint64_t> waterReplacementKeys(const KeyValues &material) {
   }
   std::vector<uint64_t> keys;
   auto append = [&](const std::string &name) {
-    const auto path = texturePath(name);
+    const auto path = vtfPath(name);
     for (const bool engine : {false, true})
       for (const bool legacy : {true, false})
         for (const auto key : textureHashes(path, engine, legacy))
@@ -482,7 +487,8 @@ std::vector<uint64_t> waterReplacementKeys(const KeyValues &material) {
 bool textureHasAlpha(const std::string &name) {
   std::vector<uint8_t> header;
   uint32_t flags = 0;
-  if (!fs::read(texturePath(name), header, 0, 64) || header.size() < 24 ||
+  if (!fs::read(vtfPath(name), header, 0, 64) || header.size() < 24 ||
+
       std::memcmp(header.data(), "VTF", 4) != 0)
     return false;
   std::memcpy(&flags, header.data() + 20, 4);
@@ -493,7 +499,8 @@ bool textureHasAlpha(const std::string &name) {
 // the whole image of one without mips. False for a missing file or a format
 // not read here.
 bool textureMean(const std::string &name, float rgba[4]) {
-  const std::string path = texturePath(name);
+  const std::string path = vtfPath(name);
+
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total) || !fs::read(path, header, 0, 80) || header.size() < 64 ||
@@ -518,7 +525,7 @@ bool textureMean(const std::string &name, float rgba[4]) {
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
   case 16: pixelBytes = 4; order[0] = 2; order[2] = 0; order[3] = -1; break; // BGRX8888
   case 13: case 20: blockBytes = 8; break;                                   // DXT1
-  case 15: blockBytes = 16; break;                                           // DXT5
+  case 14: case 15: blockBytes = 16; break;                                   // DXT3, DXT5
   default: return false;
   }
   if (!width || !height || mips > 16)
@@ -539,7 +546,9 @@ bool textureMean(const std::string &name, float rgba[4]) {
       level.size() != bytesOf(last))
     return false;
   if (blockBytes) {
-    level = blockBytes == 8 ? formats::decodeBC1(level.data(), w, h) : formats::decodeBC3(level.data(), w, h);
+    level = blockBytes == 8 ? formats::decodeBC1(level.data(), w, h)
+            : format == 14  ? formats::decodeBC2(level.data(), w, h)
+                            : formats::decodeBC3(level.data(), w, h);
     pixelBytes = 4;
   }
   double sum[4] = {};
@@ -885,6 +894,12 @@ struct World {
   uint32_t recordings = 0;
   uint32_t styledLights = 0, skyboxLights = 0, otherLights = 0, surfaceLights = 0;
   uint32_t styleDrivenLights = 0; // of lights: scaled by their lightstyle
+  // func_lod brushes, baked like world faces (lodModels): the server stops
+  // sending one outside the player's PVS, and the engine no longer draws it
+  // although the camera (or a reflection) still sees it. The positions of
+  // their baked faces' corners identify the engine's draws of them.
+  std::unordered_set<uint64_t> lodCorners;
+  uint32_t lodEntities = 0, lodFaces = 0, lodLeft = 0;
 } g_world;
 bool g_active = false;
 
@@ -977,6 +992,46 @@ void parseMapCameras(const Bsp &bsp) {
         g_world.skyScale = 16;
     }
   }
+}
+
+// func_lod brush models (indices into the models lump). One with an origin
+// or angles (a brush model placed away from where it was compiled) is left
+// to the engine.
+std::vector<int32_t> lodModels(const Bsp &bsp, size_t modelCount) {
+  std::vector<int32_t> out;
+  const auto [text, length] = bsp.lump<char>(kEntities);
+  if (!text)
+    return out;
+  const std::string entities(text, length);
+  for (size_t open = entities.find('{'); open != std::string::npos; open = entities.find('{', open + 1)) {
+    const size_t close = entities.find('}', open);
+    if (close == std::string::npos)
+      break;
+    KeyValues kv;
+    if (!parseKeyValues("entity " + entities.substr(open, close - open + 1), kv) ||
+        lower(kv.values["classname"]) != "func_lod")
+      continue;
+    const std::string &model = kv.values["model"];
+    const int index = model.size() > 1 && model[0] == '*' ? std::atoi(model.c_str() + 1) : 0;
+    float origin[3] = {}, angles[3] = {};
+    std::sscanf(kv.values["origin"].c_str(), "%f %f %f", &origin[0], &origin[1], &origin[2]);
+    std::sscanf(kv.values["angles"].c_str(), "%f %f %f", &angles[0], &angles[1], &angles[2]);
+    bool placed = false;
+    for (int k = 0; k < 3; ++k)
+      placed |= origin[k] != 0 || angles[k] != 0;
+    if (index <= 0 || size_t(index) >= modelCount || placed) {
+      ++g_world.lodLeft;
+      continue;
+    }
+    out.push_back(index);
+  }
+  return out;
+}
+
+// A corner position, to the eighth of a unit.
+uint64_t cornerKey(const float p[3]) {
+  const int32_t q[3] = {int32_t(std::lround(p[0] * 8)), int32_t(std::lround(p[1] * 8)), int32_t(std::lround(p[2] * 8))};
+  return XXH3_64bits(q, sizeof(q));
 }
 
 // Bounds-checked reads from a file image.
@@ -1284,7 +1339,8 @@ bool waterNormalsEnabled() {
 // most 64 MB of them. Else why not: a missing file, a format not read here.
 const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height,
                       std::vector<std::vector<uint8_t>> &out) {
-  const std::string path = texturePath(name);
+  const std::string path = vtfPath(name);
+
   std::vector<uint8_t> header;
   uint64_t total = 0;
   if (!fs::size(path, total))
@@ -1310,7 +1366,7 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   case 12: pixelBytes = 4; order[0] = 2; order[2] = 0; break;                // BGRA8888
   case 16: pixelBytes = 4; order[0] = 2; order[2] = 0; order[3] = -1; break; // BGRX8888
   case 13: case 20: blockBytes = 8; break;                                   // DXT1
-  case 15: blockBytes = 16; break;                                           // DXT5
+  case 14: case 15: blockBytes = 16; break;                                   // DXT3, DXT5
   default: return "a format not read here";
   }
   const uint64_t level = blockBytes ? uint64_t((w + 3) / 4) * ((h + 3) / 4) * blockBytes : uint64_t(w) * h * pixelBytes;
@@ -1326,7 +1382,9 @@ const char *vtfFrames(const std::string &name, uint32_t &width, uint32_t &height
   for (uint32_t f = 0; f < frames; ++f) {
     const uint8_t *src = data.data() + level * f * faces;
     if (blockBytes) {
-      out.push_back(blockBytes == 8 ? formats::decodeBC1(src, w, h) : formats::decodeBC3(src, w, h));
+      out.push_back(blockBytes == 8 ? formats::decodeBC1(src, w, h)
+                    : format == 14  ? formats::decodeBC2(src, w, h)
+                                    : formats::decodeBC3(src, w, h));
       continue;
     }
     std::vector<uint8_t> rgba(size_t(w) * h * 4);
@@ -1436,7 +1494,7 @@ void loadRefract(const KeyValues &kv, const std::string &identity, Material &mat
     if (name.empty())
       return true;
     std::vector<uint8_t> header;
-    if (!fs::read(texturePath(name), header, 0, 64) || header.size() < 64 ||
+    if (!fs::read(vtfPath(name), header, 0, 64) || header.size() < 64 ||
         std::memcmp(header.data(), "VTF", 4)) {
       material.importFailure = "Refract texture header unavailable: " + name;
       return false;
@@ -1505,7 +1563,7 @@ void loadRefract(const KeyValues &kv, const std::string &identity, Material &mat
       continue;
     for (const bool engine : {false, true})
       for (const bool legacy : {false, true})
-        for (auto key : textureHashes(texturePath(name), engine, legacy))
+        for (auto key : textureHashes(vtfPath(name), engine, legacy))
           if (key && keys.size() < 32 && std::find(keys.begin(), keys.end(), key) == keys.end())
             keys.push_back(key);
   }
@@ -2747,7 +2805,20 @@ bool build(const Bsp &bsp) {
     return false;
   };
 
-  for (int32_t f = world.firstFace; f < world.firstFace + world.numFaces && size_t(f) < faceCount; ++f) {
+  // The world's faces, then those of the func_lod brushes.
+  std::vector<int32_t> faceList;
+  for (int32_t f = world.firstFace; f < world.firstFace + world.numFaces && size_t(f) < faceCount; ++f)
+    faceList.push_back(f);
+  const size_t worldFaces = faceList.size();
+  for (int32_t index : lodModels(bsp, modelCount)) {
+    ++g_world.lodEntities;
+    const Model &lod = models[index];
+    for (int32_t f = lod.firstFace; f < lod.firstFace + lod.numFaces && size_t(f) < faceCount; ++f)
+      faceList.push_back(f);
+  }
+  for (size_t listed = 0; listed < faceList.size(); ++listed) {
+    const int32_t f = faceList[listed];
+    const bool lodFace = listed >= worldFaces;
     const Face &face = faces[f];
     if (face.texInfo < 0 || size_t(face.texInfo) >= texInfoCount || face.numEdges < 3 ||
         size_t(face.plane) >= planeCount)
@@ -2792,6 +2863,11 @@ bool build(const Bsp &bsp) {
     }
     if (corners.size() != size_t(face.numEdges))
       continue;
+    if (lodFace) {
+      ++g_world.lodFaces;
+      for (const auto &c : corners)
+        g_world.lodCorners.insert(cornerKey(c.data()));
+    }
     // Which way the polygon winds seen from its front (twice its area along
     // the normal, negative: clockwise). The runtime takes a triangle's front
     // from its winding (clockwise seen from the front): a polygon wound the
@@ -3208,7 +3284,7 @@ std::vector<uint64_t> textureCandidates(const std::string &name) {
 
 uint64_t textureReplacementHash(const std::string &name, uint64_t sourceHash) {
   ensureFileSystem();
-  const auto path = texturePath(name);
+  const auto path = vtfPath(name);
   for (const bool engine : {false, true}) {
     const auto hashes = textureHashes(path, engine);
     const auto found = std::find(hashes.begin(), hashes.end(), sourceHash);
@@ -3293,7 +3369,7 @@ static void loadSkyFace(KeyValues &values, SkyboxFace &image) {
     throw std::runtime_error("three-texture HDR sky encoding is unsupported");
   } else if (!hdr.empty()) {
     std::vector<uint8_t> file;
-    const auto path = texturePath(hdr);
+    const auto path = vtfPath(hdr);
     uint64_t bytes = 0;
     if (!fs::size(path, bytes) || bytes > (64u << 20) || !fs::read(path, file, 0, bytes) || file.size() != bytes)
       throw std::runtime_error("HDR sky texture is missing or exceeds 64 MiB");
@@ -4012,6 +4088,15 @@ int areaAt(const float p[3]) {
   return leaf >= 0 && size_t(leaf) < g_world.leafAreas.size() ? g_world.leafAreas[leaf] : -1;
 }
 
+bool isBakedBrushEntity(const float *a, const float *b, const float *c) {
+  if (!g_active || g_world.lodCorners.empty())
+    return false;
+  for (const float *p : {a, b, c})
+    if (!g_world.lodCorners.count(cornerKey(p)))
+      return false;
+  return true;
+}
+
 bool isStaticProp(const float *modelRows, const float eye[3]) {
   if (!g_active || g_world.props.empty())
     return false;
@@ -4214,13 +4299,15 @@ void dumpStatistics(FILE *out) {
           "   BSP world %s: faces %u displacements %u (sky %u) triangles %u | materials %u/%zu resolved | groups %zu "
           "(meshes %u) | left to the engine: translucent %u, ignored %u | rtx.conf-ignored brush materials kept %u | sky camera %d\n"
           "   BSP static props: %zu placements (%u in the 3D skybox), %zu models (%u failed), %u parts | overlays %u "
-          "(%u triangles, %zu groups) | water materials %u | surface normal textures %u (animated %u; "
+          "(%u triangles, %zu groups) | func_lod brushes %u (%u faces; left to the engine %u) | water materials %u | surface normal textures %u (animated %u; "
           "water optional via OPENREMIX_PROXY_WATER_NORMALS), water downward faces left out %u%s%s\n",
+
           g_world.map.c_str(), g_world.faces, g_world.displacements, g_world.skyFaces, g_world.triangles, resolved,
           g_world.materials.size(), g_world.groups.size(), meshes, g_world.skippedTranslucent, g_world.skippedIgnored, g_world.keptIgnored,
           int(g_world.skyCamera), g_world.props.size(), g_world.skyProps, g_world.propModels.size(),
           g_world.propModelsFailed, g_world.propParts, g_world.overlays, g_world.overlayTriangles,
-          g_world.overlayGroups.size(), g_world.waterMaterials, g_world.surfaceNormalCount, g_world.surfaceNormalAnimated,
+          g_world.overlayGroups.size(), g_world.lodEntities, g_world.lodFaces, g_world.lodLeft, g_world.waterMaterials, g_world.surfaceNormalCount, g_world.surfaceNormalAnimated,
+
           g_world.waterDownFaces,
           g_world.surfaceNormalFailure.empty() ? "" : " | not loaded: ", g_world.surfaceNormalFailure.c_str());
   {
@@ -4288,7 +4375,8 @@ void dumpStatistics(FILE *out) {
         std::string base = loadMaterial(m.name, kv) && kv.values.count("$basetexture") ? kv.values["$basetexture"] : "-";
         std::vector<uint8_t> header;
         int32_t format = -1;
-        if (base != "-" && fs::read(texturePath(base), header, 0, 64) && header.size() >= 56)
+        if (base != "-" && fs::read(vtfPath(base), header, 0, 64) && header.size() >= 56)
+
           std::memcpy(&format, header.data() + 52, 4);
         examples += "      " + m.name + " (" + kv.shader + ", $basetexture " + base + ", vtf format " +
                     std::to_string(format) + (m.candidates.empty() ? ", no hash" : ", not uploaded") + ")\n";

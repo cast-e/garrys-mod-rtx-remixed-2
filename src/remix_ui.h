@@ -23,6 +23,10 @@ void uninstall();
 // Whether the panel is open.
 bool active();
 
+// Opens the panel (as F12 does) unless it is open. On the thread that ran
+// remixapi Startup.
+void open();
+
 void dumpStatistics(FILE *out);
 
 } // namespace proxy::remix_ui
