@@ -971,6 +971,7 @@ remixapi_LightHandle createLight(const SourceLight &l, uint64_t hash) {
     distant.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_DISTANT_EXT;
     distant.direction = {l.direction[0] / len, l.direction[1] / len, l.direction[2] / len};
     distant.angularDiameterDegrees = kSunDiameterDegrees;
+    distant.volumetricRadianceScale = 1; // dxvk-remix's default; 0 leaves it out of volumetrics
     info.pNext = &distant;
   } else {
     constexpr float kRadius = 2.0f, kReference = 100.0f;
@@ -983,6 +984,7 @@ remixapi_LightHandle createLight(const SourceLight &l, uint64_t hash) {
     sphere.sType = REMIXAPI_STRUCT_TYPE_LIGHT_INFO_SPHERE_EXT;
     sphere.position = {l.position[0], l.position[1], l.position[2]};
     sphere.radius = kRadius;
+    sphere.volumetricRadianceScale = 1; // dxvk-remix's default; 0 leaves it out of volumetrics
     if (l.type == 3) {
       const float len = std::sqrt(l.direction[0] * l.direction[0] + l.direction[1] * l.direction[1] +
                                   l.direction[2] * l.direction[2]);
