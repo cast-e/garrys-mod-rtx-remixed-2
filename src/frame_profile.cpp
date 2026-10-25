@@ -48,7 +48,7 @@ struct Recorder {
                "outputWidth,outputHeight,opaqueMs,clusterMs,localShadowMs,sunShadowMs,reflectionMs,"
                "depthMs,viewmodelMs,viewmodelSunShadowMs,viewmodelLocalShadowMs,bakeState,bakeHash,"
                "hostFocused,processFocused,windowStatus,nativeFocused,nativeMinimized,nativeWidth,nativeHeight,cpuStatus,bakeStatus,"
-               "gpuTruncated,probeGatherAvailable,probeGatherMs,viewmodelColorMs\n", file.get());
+               "gpuTruncated,probeGatherAvailable,probeGatherMs,viewmodelColorMs,viewmodelDepthMs\n", file.get());
   }
 
   void sample(double hostMs, remixapi_ErrorCode presentStatus,
@@ -90,7 +90,7 @@ struct Recorder {
     const auto unixMs = (ticks - 116444736000000000ull) / 10000;
     const bool fresh = available && timings.frame != lastGpu;
     std::fprintf(file.get(), "%llu,%.6f,%u,%.6f,%.6f,%u,%u,%llu,%.6f,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,"
-        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.6f,%.6f\n",
+        "%.6f,%.6f,%.6f,%.6f,%u,%llu,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f\n",
         static_cast<unsigned long long>(unixMs), hostMs, unsigned(presentStatus), frame.recordMilliseconds, frame.fenceMilliseconds,
         unsigned(available), unsigned(fresh), static_cast<unsigned long long>(timings.frame), timings.frameMilliseconds,
         timings.renderWidth, timings.renderHeight, timings.outputWidth, timings.outputHeight,
@@ -103,7 +103,7 @@ struct Recorder {
         unsigned(windowStatus), unsigned(window.focused), unsigned(window.minimized),
         window.drawableWidth, window.drawableHeight, unsigned(cpuStatus), unsigned(bakeStatus),
         timings.truncated, unsigned(probeGather != nullptr), probeGather ? probeGather->milliseconds : 0.0,
-        pass("Forward+ viewmodel color"));
+        pass("Forward+ viewmodel color"), pass("Forward+ viewmodel depth prepass"));
     if (available) lastGpu = timings.frame;
     if (++rows % 120 == 0) std::fflush(file.get());
   }
